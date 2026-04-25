@@ -1,0 +1,39 @@
+name: Process Videos
+
+on:
+  schedule:
+    # Runs every 5 minutes — picks up any pending categorize/watermark jobs
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    # Also allows manual trigger from GitHub Actions UI
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max (handles very large files)
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run video processor
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          CLAUDE_API_KEY:       ${{ secrets.CLAUDE_API_KEY }}
+        run: node scripts/process-videos.mjs
