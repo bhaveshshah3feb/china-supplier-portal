@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { supabase } from '../../lib/supabase'
-import { enqueue, detectFileType, getUploadPath } from '../../lib/uploadManager'
+import { enqueue, detectFileType } from '../../lib/uploadManager'
+import { getUploadPath } from '../../lib/supabase'
 import CategorySelect from './CategorySelect'
 
 const ALLOWED_TYPES = [
