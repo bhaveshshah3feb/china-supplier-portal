@@ -45,7 +45,7 @@ export async function getSessionRole(userId) {
     supabase.from('admins').select('role').eq('id', userId).maybeSingle(),
     supabase.from('suppliers').select('status, supplier_code').eq('id', userId).maybeSingle(),
   ])
-  if (admin)    return { role: 'admin',    ...admin }
+  if (admin)    return { role: 'admin',    dbRole: admin.role }
   if (supplier) return { role: 'supplier', ...supplier }
   return null
 }
