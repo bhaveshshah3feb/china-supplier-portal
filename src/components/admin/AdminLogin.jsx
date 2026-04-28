@@ -20,16 +20,15 @@ export default function AdminLogin() {
     })
     if (authErr) { setError(authErr.message); setLoading(false); return }
 
-    const info = await getSessionRole(data.user.id)
-    if (!info || info.role !== 'admin') {
+    // Check role directly from the sign-in response — no DB query needed
+    const userRole = data.user?.user_metadata?.role
+    if (userRole !== 'admin') {
       await supabase.auth.signOut()
-      setError(t('auth.notAdmin'))
+      setError(t('auth.notAdmin') + ` (role: ${userRole || 'none'})`)
       setLoading(false)
       return
     }
 
-    // Update last_login
-    await supabase.from('admins').update({ last_login: new Date().toISOString() }).eq('id', data.user.id)
     navigate('/admin/dashboard')
   }
 
