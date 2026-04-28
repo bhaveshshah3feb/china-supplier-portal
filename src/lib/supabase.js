@@ -41,11 +41,19 @@ export async function getUploadSignedUrl(path) {
 // ── Role helpers ──────────────────────────────────────────────
 
 export async function getSessionRole(userId) {
-  const [{ data: admin }, { data: supplier }] = await Promise.all([
-    supabase.from('admins').select('role').eq('id', userId).maybeSingle(),
-    supabase.from('suppliers').select('status, supplier_code').eq('id', userId).maybeSingle(),
-  ])
-  if (admin)    return { role: 'admin',    dbRole: admin.role }
+  // Primary check: role in Auth user metadata (set via SQL, embedded in JWT)
+  const { data: { user } } = await supabase.auth.getUser()
+  if (user?.user_metadata?.role === 'admin') {
+    return { role: 'admin' }
+  }
+
+  // Fallback: check suppliers table
+  const { data: supplier } = await supabase
+    .from('suppliers')
+    .select('status, supplier_code')
+    .eq('id', userId)
+    .maybeSingle()
   if (supplier) return { role: 'supplier', ...supplier }
+
   return null
 }
