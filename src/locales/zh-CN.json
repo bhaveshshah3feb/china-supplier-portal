@@ -110,7 +110,16 @@
     "confirmDelete": "确认删除？",
     "approveCategory": "批准",
     "rejectCategory": "拒绝",
-    "pendingCategories": "待审分类建议"
+    "pendingCategories": "待审分类建议",
+    "salesLibrary": "销售资料库",
+    "readyFiles": "已就绪文件",
+    "allSuppliers": "全部供应商",
+    "allCategories": "全部分类",
+    "allTypes": "全部类型",
+    "copyUrl": "复制链接",
+    "openFile": "打开文件",
+    "noReadyFiles": "暂无水印文件",
+    "noReadyFilesDesc": "文件完成AI分类和水印处理后将显示在此处"
   },
   "common": {
     "loading": "加载中...",

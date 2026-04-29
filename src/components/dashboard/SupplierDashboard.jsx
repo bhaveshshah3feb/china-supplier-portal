@@ -1,220 +1,262 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { supabase } from '../../lib/supabase'
+import { supabase, getSalesUrl } from '../../lib/supabase'
 import Header from '../common/Header'
 import UploadZone from '../upload/UploadZone'
 import UploadTray from '../upload/UploadTray'
 
-const STATUS_BADGE = {
-  pending:    'bg-yellow-100 text-yellow-700',
-  active:     'bg-green-100 text-green-700',
-  suspended:  'bg-red-100 text-red-700',
+const PROC_COLOR = {
+  pending:    { bg: 'bg-gray-100',   text: 'text-gray-500',  label: 'Pending' },
+  processing: { bg: 'bg-blue-100',   text: 'text-blue-700',  label: 'Processing' },
+  completed:  { bg: 'bg-green-100',  text: 'text-green-700', label: 'Ready' },
+  failed:     { bg: 'bg-red-100',    text: 'text-red-600',   label: 'Failed' },
+  skipped:    { bg: 'bg-gray-100',   text: 'text-gray-400',  label: 'Skipped' },
+  uploading:  { bg: 'bg-yellow-100', text: 'text-yellow-700',label: 'Uploading' },
 }
 
-const PROC_BADGE = {
-  pending:    'bg-gray-100 text-gray-600',
-  processing: 'bg-blue-100 text-blue-700',
-  completed:  'bg-green-100 text-green-700',
-  failed:     'bg-red-100 text-red-600',
-  skipped:    'bg-gray-100 text-gray-400',
-}
-
-function formatBytes(b) {
+function fmtBytes(b) {
   if (!b) return '—'
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`
-  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`
-  return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`
+  if (b < 1024 ** 3)   return `${(b / 1024 / 1024).toFixed(1)} MB`
+  return `${(b / 1024 ** 3).toFixed(2)} GB`
+}
+
+function timeAgo(dateStr) {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const m = Math.floor(diff / 60000)
+  if (m < 1)    return 'just now'
+  if (m < 60)   return `${m}m ago`
+  if (m < 1440) return `${Math.floor(m / 60)}h ago`
+  return `${Math.floor(m / 1440)}d ago`
 }
 
 export default function SupplierDashboard() {
-  const { t } = useTranslation()
-  const [supplier, setSupplier] = useState(null)
-  const [uploads, setUploads]   = useState([])
-  const [tab, setTab]           = useState('dashboard')
-  const [loading, setLoading]   = useState(true)
+  const { t, i18n } = useTranslation()
+  const isZh = i18n.language?.startsWith('zh')
+  const nameKey = isZh ? 'name_zh' : 'name_en'
+
+  const [supplier, setSupplier]   = useState(null)
+  const [uploads,  setUploads]    = useState([])
+  const [tab,      setTab]        = useState('upload')
+  const [loading,  setLoading]    = useState(true)
 
   useEffect(() => {
-    async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
-      const [{ data: sup }, { data: ups }] = await Promise.all([
-        supabase.from('suppliers').select('*').eq('id', user.id).single(),
-        supabase.from('uploads').select(`*, main_categories(name_en,name_zh), sub_categories(name_en,name_zh)`)
-          .eq('supplier_id', user.id).order('created_at', { ascending: false }).limit(50),
-      ])
-      setSupplier(sup)
-      setUploads(ups || [])
-      setLoading(false)
-    }
     load()
-
-    // Realtime: reflect processing status changes instantly
-    const channel = supabase.channel('uploads')
+    // Realtime updates for processing status
+    const ch = supabase.channel('supplier_uploads')
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'uploads' },
-        payload => setUploads(prev => prev.map(u => u.id === payload.new.id ? { ...u, ...payload.new } : u))
+        p => setUploads(prev => prev.map(u => u.id === p.new.id ? { ...u, ...p.new } : u))
       ).subscribe()
-    return () => supabase.removeChannel(channel)
+    return () => supabase.removeChannel(ch)
   }, [])
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    )
+  async function load() {
+    const { data: { user } } = await supabase.auth.getUser()
+    const [{ data: sup }, { data: ups }] = await Promise.all([
+      supabase.from('suppliers').select('*').eq('id', user.id).single(),
+      supabase.from('uploads')
+        .select('*, main_categories(name_en,name_zh), sub_categories(name_en,name_zh)')
+        .eq('supplier_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(100),
+    ])
+    setSupplier(sup)
+    setUploads(ups || [])
+    setLoading(false)
   }
+
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="w-8 h-8 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
+    </div>
+  )
 
   const stats = {
     total:      uploads.length,
-    processing: uploads.filter(u => u.processing_status === 'processing').length,
-    completed:  uploads.filter(u => u.processing_status === 'completed').length,
+    uploading:  uploads.filter(u => u.upload_status === 'uploading').length,
+    processing: uploads.filter(u => ['pending','processing'].includes(u.processing_status) && u.upload_status === 'completed').length,
+    ready:      uploads.filter(u => u.processing_status === 'completed').length,
     failed:     uploads.filter(u => u.processing_status === 'failed').length,
   }
 
-  const isZh = document.documentElement.lang?.startsWith('zh')
-
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
       <Header role="supplier" />
 
-      {/* Nav tabs */}
+      {/* Sub-nav */}
       <div className="bg-white border-b border-gray-200 px-4">
-        <nav className="flex gap-1 max-w-5xl mx-auto">
-          {['dashboard', 'uploads', 'newUpload'].map(k => (
-            <button key={k} onClick={() => setTab(k)}
-              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors
-                ${tab === k ? 'border-brand-600 text-brand-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        <nav className="flex gap-0 max-w-5xl mx-auto">
+          {[
+            { key: 'upload',  icon: '⬆️', label: isZh ? '上传文件' : 'Upload Files' },
+            { key: 'uploads', icon: '📁', label: isZh ? '我的上传' : 'My Uploads' + (stats.total ? ` (${stats.total})` : '') },
+            { key: 'account', icon: '👤', label: isZh ? '账户信息' : 'Account' },
+          ].map(({ key, icon, label }) => (
+            <button key={key} onClick={() => setTab(key)}
+              className={`flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap
+                ${tab === key ? 'border-brand-600 text-brand-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
             >
-              {t(`nav.${k}`)}
+              <span>{icon}</span> {label}
             </button>
           ))}
         </nav>
       </div>
 
-      <div className="max-w-5xl mx-auto px-4 py-6">
+      <div className="flex-1 max-w-5xl mx-auto w-full px-4 py-6 space-y-5">
 
-        {/* ── Dashboard tab ── */}
-        {tab === 'dashboard' && (
-          <div className="space-y-6">
-            {/* Welcome + status */}
-            <div className="bg-white rounded-2xl p-6 border border-gray-200">
-              <div className="flex items-start justify-between flex-wrap gap-3">
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-800">
-                    {t('dashboard.welcome')}, {supplier?.company_name_en}
-                  </h2>
-                  {supplier?.company_name_zh && (
-                    <p className="text-gray-500 text-sm mt-0.5">{supplier.company_name_zh}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="text-right">
-                    <p className="text-xs text-gray-400">{t('dashboard.supplierCode')}</p>
-                    <p className="font-mono font-bold text-gray-700">{supplier?.supplier_code}</p>
+        {/* ── Upload Tab ── */}
+        {tab === 'upload' && (
+          <div className="space-y-5">
+            {/* Welcome banner */}
+            <div className="bg-gradient-to-r from-brand-700 to-brand-500 rounded-2xl p-5 text-white flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">{t('dashboard.welcome')}, {supplier?.company_name_en}</h2>
+                <p className="text-brand-100 text-sm mt-0.5">{isZh ? '请上传您的产品目录、视频和价格表' : 'Upload your product catalogs, videos and pricelists below'}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-brand-200">{isZh ? '供应商编码' : 'Supplier Code'}</p>
+                <p className="font-mono font-bold text-lg">{supplier?.supplier_code}</p>
+              </div>
+            </div>
+
+            {/* Stats row */}
+            {stats.total > 0 && (
+              <div className="grid grid-cols-4 gap-3">
+                {[
+                  { label: isZh ? '总文件' : 'Total', value: stats.total, color: 'text-gray-700' },
+                  { label: isZh ? '处理中' : 'Processing', value: stats.processing, color: 'text-blue-600' },
+                  { label: isZh ? '已完成' : 'Ready', value: stats.ready, color: 'text-green-600' },
+                  { label: isZh ? '失败' : 'Failed', value: stats.failed, color: 'text-red-500' },
+                ].map(s => (
+                  <div key={s.label} className="bg-white rounded-xl p-3 text-center border border-gray-100">
+                    <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{s.label}</p>
                   </div>
-                  <span className={`text-xs px-3 py-1 rounded-full font-medium ${STATUS_BADGE[supplier?.status]}`}>
-                    {t(`dashboard.status.${supplier?.status}`)}
-                  </span>
-                </div>
+                ))}
               </div>
+            )}
+
+            {/* Upload zone */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-6">
+              <h3 className="font-semibold text-gray-800 mb-4">
+                {isZh ? '📤 上传新文件' : '📤 Upload New Files'}
+              </h3>
+              <UploadZone onUploadsStarted={() => setTab('uploads')} />
             </div>
 
-            {/* Stat cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              {[
-                { label: t('dashboard.totalUploads'), value: stats.total,      color: 'text-brand-700',  bg: 'bg-brand-50' },
-                { label: t('dashboard.processing'),   value: stats.processing,  color: 'text-blue-700',   bg: 'bg-blue-50' },
-                { label: t('dashboard.completed'),    value: stats.completed,   color: 'text-green-700',  bg: 'bg-green-50' },
-                { label: t('dashboard.failed'),       value: stats.failed,      color: 'text-red-700',    bg: 'bg-red-50' },
-              ].map(s => (
-                <div key={s.label} className={`rounded-2xl p-5 ${s.bg}`}>
-                  <p className={`text-3xl font-bold ${s.color}`}>{s.value}</p>
-                  <p className="text-sm text-gray-600 mt-1">{s.label}</p>
-                </div>
-              ))}
-            </div>
-
-            {/* Recent uploads */}
-            <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-              <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-                <h3 className="font-semibold text-gray-800">{t('dashboard.recentUploads')}</h3>
-                <button onClick={() => setTab('uploads')} className="text-sm text-brand-600 hover:underline">View all →</button>
+            {/* How it works */}
+            <div className="bg-blue-50 rounded-2xl p-5 border border-blue-100">
+              <h4 className="font-semibold text-blue-900 mb-3">{isZh ? '上传流程说明' : 'How it works'}</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                {[
+                  { icon: '📤', step: isZh ? '您上传文件' : 'You upload files' },
+                  { icon: '🤖', step: isZh ? 'AI自动分类' : 'AI auto-categorizes' },
+                  { icon: '🎨', step: isZh ? '添加品牌水印' : 'Branding applied' },
+                  { icon: '✅', step: isZh ? '文件准备就绪' : 'Files ready for sales' },
+                ].map(({ icon, step }, i) => (
+                  <div key={i} className="flex items-center gap-2 text-sm text-blue-700">
+                    <span className="text-lg">{icon}</span>
+                    <span>{step}</span>
+                    {i < 3 && <span className="text-blue-300 hidden sm:block">→</span>}
+                  </div>
+                ))}
               </div>
-              {uploads.length === 0 ? (
-                <div className="text-center py-12">
-                  <p className="text-gray-400 mb-4">{t('dashboard.noUploads')}</p>
-                  <button onClick={() => setTab('newUpload')} className="text-brand-600 font-medium hover:underline">{t('dashboard.uploadNow')}</button>
-                </div>
-              ) : (
-                <div className="divide-y divide-gray-50">
-                  {uploads.slice(0, 5).map(u => (
-                    <UploadRow key={u.id} upload={u} isZh={isZh} t={t} />
-                  ))}
-                </div>
-              )}
             </div>
           </div>
         )}
 
-        {/* ── Uploads tab ── */}
+        {/* ── My Uploads Tab ── */}
         {tab === 'uploads' && (
-          <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100">
-              <h3 className="font-semibold text-gray-800">{t('nav.uploads')} ({uploads.length})</h3>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-gray-800">{isZh ? '我的上传记录' : 'My Uploads'} ({uploads.length})</h3>
+              <button onClick={() => setTab('upload')}
+                className="text-sm bg-brand-600 text-white px-4 py-2 rounded-lg hover:bg-brand-700 transition-colors">
+                + {isZh ? '上传更多' : 'Upload More'}
+              </button>
             </div>
+
             {uploads.length === 0 ? (
-              <div className="text-center py-12 text-gray-400">{t('dashboard.noUploads')}</div>
+              <div className="bg-white rounded-2xl border border-gray-200 p-16 text-center">
+                <div className="text-5xl mb-4">📂</div>
+                <p className="text-gray-500 mb-4">{t('dashboard.noUploads')}</p>
+                <button onClick={() => setTab('upload')}
+                  className="text-brand-600 font-medium hover:underline">{t('dashboard.uploadNow')}</button>
+              </div>
             ) : (
-              <div className="divide-y divide-gray-50">
-                {uploads.map(u => <UploadRow key={u.id} upload={u} isZh={isZh} t={t} />)}
+              <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-100">
+                      <tr>
+                        {['', 'File', 'Category', 'Size', 'Status', 'Watermark', 'Uploaded'].map(h => (
+                          <th key={h} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {uploads.map(u => {
+                        const p = PROC_COLOR[u.processing_status] || PROC_COLOR.pending
+                        const typeIcon = u.file_type === 'video' ? '🎬' : u.file_type === 'image' ? '🖼️' : '📄'
+                        return (
+                          <tr key={u.id} className="hover:bg-gray-50 transition-colors">
+                            <td className="px-4 py-3 text-xl">{typeIcon}</td>
+                            <td className="px-4 py-3 max-w-48">
+                              <p className="text-gray-800 font-medium truncate">{u.original_filename}</p>
+                            </td>
+                            <td className="px-4 py-3 text-gray-500">
+                              <p>{u.main_categories?.[nameKey] || '—'}</p>
+                              {u.sub_categories && <p className="text-xs text-gray-400">{u.sub_categories[nameKey]}</p>}
+                            </td>
+                            <td className="px-4 py-3 text-gray-400">{fmtBytes(u.file_size)}</td>
+                            <td className="px-4 py-3">
+                              <span className={`text-xs px-2 py-1 rounded-full font-medium ${p.bg} ${p.text}`}>{p.label}</span>
+                            </td>
+                            <td className="px-4 py-3">
+                              {u.processing_status === 'completed'
+                                ? <span className="text-xs text-green-600 font-medium">✅ Applied</span>
+                                : <span className="text-xs text-gray-300">—</span>}
+                            </td>
+                            <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{timeAgo(u.created_at)}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>
         )}
 
-        {/* ── New Upload tab ── */}
-        {tab === 'newUpload' && (
-          <div className="bg-white rounded-2xl border border-gray-200 p-6">
-            <h3 className="font-semibold text-gray-800 mb-5">{t('upload.title')}</h3>
-            <UploadZone onUploadsStarted={() => setTab('uploads')} />
+        {/* ── Account Tab ── */}
+        {tab === 'account' && (
+          <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-5 max-w-lg">
+            <h3 className="font-semibold text-gray-800">{isZh ? '账户信息' : 'Account Information'}</h3>
+            <div className="space-y-3">
+              {[
+                { label: isZh ? '供应商编码' : 'Supplier Code', value: supplier?.supplier_code, mono: true },
+                { label: isZh ? '公司名称（英文）' : 'Company (English)', value: supplier?.company_name_en },
+                { label: isZh ? '公司名称（中文）' : 'Company (Chinese)', value: supplier?.company_name_zh },
+                { label: isZh ? '电话' : 'Phone', value: supplier?.phone },
+                { label: isZh ? '账户状态' : 'Account Status', value: supplier?.status },
+              ].map(({ label, value, mono }) => (
+                <div key={label} className="flex justify-between items-center py-2 border-b border-gray-50">
+                  <span className="text-sm text-gray-500">{label}</span>
+                  <span className={`text-sm font-medium text-gray-800 ${mono ? 'font-mono' : ''}`}>{value || '—'}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-gray-400">
+              {isZh
+                ? '如需修改账户信息，请联系管理员：+91 9841081945'
+                : 'To update account details, contact admin: +91 9841081945'}
+            </p>
           </div>
         )}
+
       </div>
 
-      {/* Persistent upload tray */}
       <UploadTray />
-    </div>
-  )
-}
-
-function UploadRow({ upload, isZh, t }) {
-  const mainCat = upload.main_categories
-  const subCat  = upload.sub_categories
-  const nameKey = isZh ? 'name_zh' : 'name_en'
-  const typeIcon = upload.file_type === 'video' ? '🎬' : upload.file_type === 'image' ? '🖼️' : '📄'
-
-  return (
-    <div className="px-6 py-4 flex items-center gap-4">
-      <span className="text-2xl">{typeIcon}</span>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-700 truncate">{upload.original_filename}</p>
-        <p className="text-xs text-gray-400 mt-0.5">
-          {mainCat?.[nameKey] || '—'}
-          {subCat?.[nameKey] ? ` › ${subCat[nameKey]}` : ''}
-        </p>
-      </div>
-      <div className="text-right shrink-0">
-        <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-          upload.processing_status === 'completed' ? 'bg-green-100 text-green-700' :
-          upload.processing_status === 'processing' ? 'bg-blue-100 text-blue-700' :
-          upload.processing_status === 'failed' ? 'bg-red-100 text-red-600' :
-          'bg-gray-100 text-gray-500'
-        }`}>
-          {t(`upload.${upload.processing_status}`) || upload.processing_status}
-        </span>
-        <p className="text-xs text-gray-400 mt-1">
-          {new Date(upload.created_at).toLocaleDateString()}
-        </p>
-      </div>
     </div>
   )
 }

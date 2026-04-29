@@ -110,7 +110,16 @@
     "confirmDelete": "Are you sure you want to delete this?",
     "approveCategory": "Approve",
     "rejectCategory": "Reject",
-    "pendingCategories": "Pending Category Suggestions"
+    "pendingCategories": "Pending Category Suggestions",
+    "salesLibrary": "Sales Library",
+    "readyFiles": "Ready Files",
+    "allSuppliers": "All Suppliers",
+    "allCategories": "All Categories",
+    "allTypes": "All Types",
+    "copyUrl": "Copy URL",
+    "openFile": "Open File",
+    "noReadyFiles": "No watermarked files yet",
+    "noReadyFilesDesc": "Files appear here once AI categorization and watermarking are complete"
   },
   "common": {
     "loading": "Loading...",
