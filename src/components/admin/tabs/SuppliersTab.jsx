@@ -281,7 +281,7 @@ export default function SuppliersTab() {
       {showInvite && (
         <InviteSupplierModal
           onClose={() => setShowInvite(false)}
-          onInvited={() => { setShowInvite(false); load() }}
+          onDone={() => { setShowInvite(false); load() }}
         />
       )}
 
@@ -313,14 +313,13 @@ export default function SuppliersTab() {
                   {linkCopied ? '✓ Copied!' : '📋 Copy Link'}
                 </button>
                 {loginLink.phone ? (
-                  <button onClick={() => {
-                    const clean = loginLink.phone.replace(/[^\d+]/g, '').replace(/^\+/, '')
-                    const msg = `Hello! Here is your Aryana Amusements Supplier Portal login link:\n\n${loginLink.link}\n\nThis link expires in 24 hours.\n\n- Bhavesh, Aryana Amusements\n+91 9841081945`
-                    window.open(`https://wa.me/${clean}?text=${encodeURIComponent(msg)}`, '_blank')
-                  }}
+                  <a
+                    href={`https://wa.me/${loginLink.phone.replace(/[^\d]/g, '')}?text=${encodeURIComponent(`Hello! Here is your Aryana Amusements Supplier Portal login link:\n\n${loginLink.link}\n\nThis link expires in 24 hours.\n\n- Bhavesh, Aryana Amusements\n+91 9841081945`)}`}
+                    target="_blank"
+                    rel="noreferrer"
                     className="flex items-center justify-center gap-2 bg-green-600 text-white hover:bg-green-700 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors">
                     💬 Send via WhatsApp
-                  </button>
+                  </a>
                 ) : (
                   <button onClick={async () => {
                     const msg = `Hello! Here is your Aryana Amusements Supplier Portal login link:\n\n${loginLink.link}\n\nThis link expires in 24 hours.\n\n- Bhavesh, Aryana Amusements\n+91 9841081945`

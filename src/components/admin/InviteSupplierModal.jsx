@@ -22,7 +22,7 @@ function buildMessage(invite, lang) {
 }
 
 // ── component ─────────────────────────────────────────────────
-export default function InviteSupplierModal({ onClose, onInvited }) {
+export default function InviteSupplierModal({ onClose, onDone }) {
   // step: 'form' → fill details  |  'share' → show send options
   const [step, setStep]         = useState('form')
   const [invite, setInvite]     = useState(null)   // { invite_url, email, phone, ... }
@@ -66,7 +66,6 @@ export default function InviteSupplierModal({ onClose, onInvited }) {
       if (!res.ok) throw new Error(json.error || 'Could not create invitation')
       setInvite({ ...form, invite_url: json.invite_url, invite_token: json.invite_token })
       setStep('share')
-      if (onInvited) onInvited()
     } catch (err) {
       setCreateErr(err.message)
     } finally {
@@ -346,13 +345,13 @@ export default function InviteSupplierModal({ onClose, onInvited }) {
 
             {/* Footer buttons */}
             <div className="flex gap-2 pt-1">
-              <button onClick={() => { setStep('form'); setInvite(null); setEmailState('idle') }}
+              <button onClick={() => { setStep('form'); setInvite(null); setEmailState('idle'); setCreateErr('') }}
                 className="flex-1 border border-gray-200 text-gray-600 hover:bg-gray-50 px-4 py-2 rounded-xl text-sm transition-colors">
                 + Invite Another
               </button>
-              <button onClick={onClose}
+              <button onClick={() => { if (onDone) onDone(); onClose() }}
                 className="flex-1 bg-brand-600 text-white hover:bg-brand-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors">
-                Done
+                Done ✓
               </button>
             </div>
           </div>
