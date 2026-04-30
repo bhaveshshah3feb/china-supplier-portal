@@ -22,7 +22,15 @@
     "pendingApproval": "Your account is pending approval. We will notify you once activated.",
     "suspended": "Your account has been suspended. Please contact support.",
     "adminLogin": "Admin Login",
-    "notAdmin": "This account does not have admin access."
+    "notAdmin": "This account does not have admin access.",
+    "invitedBy": "You've been invited by Aryana Amusements!",
+    "inviteExpired": "This invitation link has expired or is invalid.",
+    "invitePrefilled": "Your company details are pre-filled. Just set a password to complete registration.",
+    "sendOtp": "Send OTP Code",
+    "verifyOtp": "Verify & Login",
+    "otpSentTo": "OTP sent to {{email}}. Check your inbox.",
+    "whatsappHelp": "Prefer WhatsApp or WeChat?",
+    "whatsappHelpDesc": "Ask admin to send you a one-click login link — no password needed."
   },
   "nav": {
     "dashboard": "Dashboard",

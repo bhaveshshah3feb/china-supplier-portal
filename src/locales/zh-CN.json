@@ -22,7 +22,15 @@
     "pendingApproval": "您的账户正在审核中，激活后我们会通知您。",
     "suspended": "您的账户已被暂停，请联系客服。",
     "adminLogin": "管理员登录",
-    "notAdmin": "该账户没有管理员权限。"
+    "notAdmin": "该账户没有管理员权限。",
+    "invitedBy": "您已收到 Aryana Amusements 的邀请！",
+    "inviteExpired": "邀请链接已失效或不存在。",
+    "invitePrefilled": "您的公司信息已预填写，只需设置密码即可完成注册。",
+    "sendOtp": "发送验证码",
+    "verifyOtp": "验证登录",
+    "otpSentTo": "验证码已发送至 {{email}}，请查看邮件。",
+    "whatsappHelp": "需要通过微信或WhatsApp登录？",
+    "whatsappHelpDesc": "联系管理员获取免密登录链接，可直接通过微信或WhatsApp发送。"
   },
   "nav": {
     "dashboard": "控制台",
