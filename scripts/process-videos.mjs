@@ -1,7 +1,7 @@
 /**
  * process-videos.mjs
  * Runs on GitHub Actions (Ubuntu + FFmpeg available).
- * Polls Supabase for pending video jobs, processes them, uploads results.
+ * Polls Supabase for pending video/image jobs, processes them, uploads results.
  *
  * Jobs handled:
  *   categorize — extract 3 frames → Claude Vision → update category
@@ -27,18 +27,16 @@ if (!existsSync(TMP)) mkdirSync(TMP, { recursive: true })
 
 // ── Watermark config ─────────────────────────────────────────
 const WM = {
-  name:   'Bhavesh - Aryana Amusements',
-  phone:  '+91 9841081945',
-  // Box sizes that cover typical logo placements in all 4 corners
+  name:    'Bhavesh - Aryana Amusements',
+  phone:   '+91 9841081945',
   cornerW: 260,
   cornerH: 80,
 }
 
 // ── Main ─────────────────────────────────────────────────────
 async function main() {
-  console.log('🔍 Checking for pending jobs…')
+  console.log('Checking for pending jobs...')
 
-  // Claim up to 5 pending jobs atomically (first-come-first-served)
   const { data: jobs, error } = await supabase
     .from('processing_queue')
     .select('*, uploads(*, suppliers(supplier_code, company_name_en), main_categories(slug,name_en), sub_categories(slug,name_en))')
@@ -48,9 +46,9 @@ async function main() {
     .limit(5)
 
   if (error) { console.error('DB error:', error); return }
-  if (!jobs || jobs.length === 0) { console.log('✅ No pending jobs. Done.'); return }
+  if (!jobs || jobs.length === 0) { console.log('No pending jobs. Done.'); return }
 
-  console.log(`📋 Found ${jobs.length} job(s)`)
+  console.log(`Found ${jobs.length} job(s)`)
 
   for (const job of jobs) {
     await processJob(job)
@@ -66,7 +64,7 @@ async function processJob(job) {
     return
   }
 
-  console.log(`\n▶ Job ${jobId} | type=${job_type} | file=${upload.original_filename}`)
+  console.log(`\nJob ${jobId} | type=${job_type} | file=${upload.original_filename}`)
 
   // Mark as processing
   await supabase.from('processing_queue').update({
@@ -77,30 +75,29 @@ async function processJob(job) {
 
   await supabase.from('uploads').update({ processing_status: 'processing' }).eq('id', upload.id)
 
-  const tmpInput  = join(TMP, `input_${jobId}${extname(upload.original_filename) || '.mp4'}`)
-  const tmpOutput = join(TMP, `output_${jobId}.mp4`)
-  const frames    = []
+  const origExt  = extname(upload.original_filename).toLowerCase()
+  const tmpInput = join(TMP, `input_${jobId}${origExt || '.mp4'}`)
+  const frames   = []
 
   try {
-    // ── Download video ──────────────────────────────────────
-    console.log('  ⬇ Downloading from Supabase Storage…')
+    // ── Download file ──────────────────────────────────────
+    console.log('  Downloading from Supabase Storage...')
     const { data: fileData, error: dlErr } = await supabase.storage
       .from('uploads').download(upload.storage_path)
     if (dlErr) throw new Error(`Download failed: ${dlErr.message}`)
 
     const buffer = Buffer.from(await fileData.arrayBuffer())
     writeFileSync(tmpInput, buffer)
-    console.log(`  ✓ Downloaded ${(buffer.length / 1024 / 1024).toFixed(1)} MB`)
+    console.log(`  Downloaded ${(buffer.length / 1024 / 1024).toFixed(1)} MB`)
 
-    // ── Get video duration ──────────────────────────────────
-    const { stdout: probeOut } = await execAsync(
-      `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${tmpInput}"`
-    )
-    const duration = parseFloat(probeOut.trim()) || 30
-
-    // ── CATEGORIZE job ──────────────────────────────────────
+    // ── CATEGORIZE job (videos only) ───────────────────────
     if (job_type === 'categorize') {
-      console.log('  🎯 Extracting frames for AI categorization…')
+      const { stdout: probeOut } = await execAsync(
+        `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${tmpInput}"`
+      )
+      const duration = parseFloat(probeOut.trim()) || 30
+
+      console.log('  Extracting frames for AI categorization...')
       const timestamps = [0.1, 0.5, 0.9].map(p => Math.max(1, duration * p))
 
       for (let i = 0; i < timestamps.length; i++) {
@@ -112,20 +109,14 @@ async function processJob(job) {
       }
 
       if (frames.length === 0) throw new Error('Could not extract frames')
-      console.log(`  ✓ Extracted ${frames.length} frames`)
+      console.log(`  Extracted ${frames.length} frames`)
 
-      // Fetch active categories
       const { data: mainCats } = await supabase.from('main_categories').select('id,slug,name_en').eq('status','active')
       const catList = (mainCats||[]).map(c => `${c.slug} (${c.name_en})`).join(', ')
 
-      // Build Claude Vision request with all 3 frames
       const imageBlocks = frames.map(fp => ({
         type: 'image',
-        source: {
-          type:       'base64',
-          media_type: 'image/jpeg',
-          data:       readFileSync(fp).toString('base64'),
-        },
+        source: { type: 'base64', media_type: 'image/jpeg', data: readFileSync(fp).toString('base64') },
       }))
 
       const response = await anthropic.messages.create({
@@ -147,16 +138,15 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
 
       const aiSlug  = response.content[0]?.text?.trim().toLowerCase().replace(/[^a-z-]/g,'')
       const matched = (mainCats||[]).find(c => c.slug === aiSlug)
-      console.log(`  🤖 AI category: ${aiSlug} (matched: ${!!matched})`)
+      console.log(`  AI category: ${aiSlug} (matched: ${!!matched})`)
 
-      // Update upload
       await supabase.from('uploads').update({
         ai_main_category_id: matched?.id || null,
         main_category_id:    upload.main_category_id || matched?.id || null,
         ai_confidence:       matched ? 0.9 : 0.3,
       }).eq('id', upload.id)
 
-      // Create watermark job
+      // Queue the watermark job
       await supabase.from('processing_queue').insert([{
         upload_id: upload.id,
         job_type:  'watermark',
@@ -170,65 +160,94 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
     else if (job_type === 'watermark') {
       const supplierCode = upload.suppliers?.supplier_code || 'UNKNOWN'
       const catSlug      = upload.main_categories?.slug    || 'other'
+      const isImage      = upload.file_type === 'image'
 
-      console.log(`  🎨 Applying watermarks (SRC: ${supplierCode})…`)
+      // Documents / pricelists — copy to sales as-is (no FFmpeg watermark)
+      if (upload.file_type === 'document' || upload.file_type === 'pricelist') {
+        console.log('  Document/pricelist — copying to sales without watermark')
+        const salesFilename = `${catSlug}/${upload.id}_${supplierCode}${origExt}`
+        const { error: upErr } = await supabase.storage
+          .from('sales')
+          .upload(salesFilename, buffer || readFileSync(tmpInput), {
+            contentType: upload.mime_type || 'application/octet-stream',
+            upsert: true,
+          })
+        if (upErr) throw new Error(`Sales upload failed: ${upErr.message}`)
+        await supabase.from('uploads').update({
+          processing_status: 'completed',
+          sales_path:        salesFilename,
+        }).eq('id', upload.id)
+        await completeJob(jobId)
+        return
+      }
 
-      // Build FFmpeg filter — covers all 4 corners + adds name + phone + SRC code
-      // Each corner box is 260×80 at 70% opacity to cover typical logo placements
+      console.log(`  Applying watermarks (SRC: ${supplierCode}, type: ${isImage ? 'image' : 'video'})...`)
+
       const cW = WM.cornerW, cH = WM.cornerH
       const vf = [
-        // Black overlay boxes on all 4 corners
         `drawbox=x=0:y=0:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
         `drawbox=x=iw-${cW}:y=0:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
         `drawbox=x=0:y=ih-${cH}:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
         `drawbox=x=iw-${cW}:y=ih-${cH}:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
-        // Our branding
         `drawtext=text='${WM.name}':x=10:y=10:fontsize=26:fontcolor=white:shadowx=2:shadowy=2`,
         `drawtext=text='${WM.phone}':x=10:y=ih-38:fontsize=22:fontcolor=yellow@0.95:shadowx=2:shadowy=2`,
-        // Supplier tracking code (small, subtle, bottom-right)
         `drawtext=text='SRC\\: ${supplierCode}':x=iw-${cW-10}:y=ih-24:fontsize=13:fontcolor=white@0.55`,
       ].join(',')
 
-      await execAsync(
-        `ffmpeg -i "${tmpInput}" -vf "${vf}" -c:v libx264 -crf 23 -preset fast -c:a copy "${tmpOutput}" -y`,
-        { maxBuffer: 1024 * 1024 * 100 }
-      )
+      // Different output format + FFmpeg flags for images vs videos
+      const salesExt  = isImage ? (origExt || '.jpg') : '.mp4'
+      const tmpOutput = join(TMP, `output_${jobId}${salesExt}`)
 
-      console.log('  ✓ Watermark applied')
+      if (isImage) {
+        // Single frame — no video codec, no audio stream
+        await execAsync(
+          `ffmpeg -i "${tmpInput}" -vf "${vf}" -frames:v 1 "${tmpOutput}" -y`,
+          { maxBuffer: 1024 * 1024 * 100 }
+        )
+      } else {
+        // Video — re-encode H.264
+        await execAsync(
+          `ffmpeg -i "${tmpInput}" -vf "${vf}" -c:v libx264 -crf 23 -preset fast -c:a copy "${tmpOutput}" -y`,
+          { maxBuffer: 1024 * 1024 * 100 }
+        )
+      }
 
-      // Upload processed video to sales bucket
-      const salesFilename = `${catSlug}/${upload.id}_${supplierCode}${extname(upload.original_filename)||'.mp4'}`
+      console.log('  Watermark applied')
+
+      const salesFilename = `${catSlug}/${upload.id}_${supplierCode}${salesExt}`
       const outputBuffer  = readFileSync(tmpOutput)
 
       const { error: upErr } = await supabase.storage
         .from('sales')
         .upload(salesFilename, outputBuffer, {
-          contentType: upload.mime_type || 'video/mp4',
-          upsert:      true,
+          contentType: isImage ? (upload.mime_type || 'image/jpeg') : 'video/mp4',
+          upsert: true,
         })
       if (upErr) throw new Error(`Sales upload failed: ${upErr.message}`)
 
-      console.log(`  ✓ Uploaded to sales/${salesFilename}`)
+      console.log(`  Uploaded to sales/${salesFilename}`)
 
-      // Update upload record
       await supabase.from('uploads').update({
         processing_status: 'completed',
         sales_path:        salesFilename,
       }).eq('id', upload.id)
 
+      // Cleanup output temp file
+      try { if (existsSync(tmpOutput)) unlinkSync(tmpOutput) } catch {}
+
       await completeJob(jobId)
     }
 
   } catch (err) {
-    console.error(`  ✗ Job ${jobId} failed:`, err.message)
+    console.error(`  Job ${jobId} failed:`, err.message)
     await failJob(jobId, err.message)
     await supabase.from('uploads').update({
       processing_status: 'failed',
       error_message:     err.message,
     }).eq('id', upload.id)
   } finally {
-    // Cleanup temp files
-    for (const f of [tmpInput, tmpOutput, ...frames]) {
+    // Cleanup input and extracted frames
+    for (const f of [tmpInput, ...frames]) {
       try { if (existsSync(f)) unlinkSync(f) } catch {}
     }
   }
@@ -240,7 +259,7 @@ async function completeJob(jobId) {
     status:       'completed',
     completed_at: new Date().toISOString(),
   }).eq('id', jobId)
-  console.log(`  ✅ Job ${jobId} completed`)
+  console.log(`  Job ${jobId} completed`)
 }
 
 async function failJob(jobId, errorLog) {

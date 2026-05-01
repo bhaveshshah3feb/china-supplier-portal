@@ -15,25 +15,25 @@ export default async function handler(req, res) {
   if (!uploadId || !storagePath) return res.status(400).json({ error: 'Missing fields' })
 
   try {
-    // Get the upload record
     const { data: upload, error: uploadErr } = await supabase
       .from('uploads').select('*, suppliers(supplier_code)').eq('id', uploadId).single()
     if (uploadErr || !upload) return res.status(404).json({ error: 'Upload not found' })
 
-    // Videos are handled by GitHub Actions (FFmpeg frame extraction)
+    // ── Videos: queue for GitHub Actions (FFmpeg frame extraction needed) ──
     if (upload.file_type === 'video') {
-      // Create processing queue jobs for GitHub Actions to pick up
       await supabase.from('processing_queue').insert([
         { upload_id: uploadId, job_type: 'categorize', status: 'pending' },
       ])
-      await supabase.from('uploads').update({ upload_status: 'completed' }).eq('id', uploadId)
+      await supabase.from('uploads').update({
+        upload_status:     'completed',
+        processing_status: 'pending',   // GitHub Actions will update this
+      }).eq('id', uploadId)
       return res.status(200).json({ queued: true })
     }
 
-    // For images, PDFs, docs — categorize directly with Claude Vision
+    // ── Images, PDFs, docs: categorize directly with Claude Vision ──
     await supabase.from('uploads').update({ processing_status: 'processing' }).eq('id', uploadId)
 
-    // Download file from Supabase Storage
     const { data: fileData, error: dlErr } = await supabase.storage
       .from('uploads').download(storagePath)
     if (dlErr) throw dlErr
@@ -42,11 +42,9 @@ export default async function handler(req, res) {
     const base64Data = buffer.toString('base64')
     const mediaType  = upload.mime_type || 'image/jpeg'
 
-    // Fetch active main categories to give Claude the exact options
     const { data: mainCats } = await supabase.from('main_categories').select('id, slug, name_en').eq('status', 'active')
     const catList = (mainCats || []).map(c => `${c.slug} (${c.name_en})`).join(', ')
 
-    // Call Claude Vision
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-5',
       max_tokens: 100,
@@ -71,19 +69,35 @@ If it's a document/pricelist not showing equipment, reply "other".`,
     const aiSlug = message.content[0]?.text?.trim().toLowerCase().replace(/[^a-z-]/g, '')
     const matched = (mainCats || []).find(c => c.slug === aiSlug)
 
-    // Update upload with AI category
+    // ── Documents / pricelists: mark completed immediately (no watermark needed) ──
+    if (upload.file_type === 'document' || upload.file_type === 'pricelist') {
+      await supabase.from('uploads').update({
+        upload_status:       'completed',
+        processing_status:   'completed',
+        ai_main_category_id: matched?.id || null,
+        main_category_id:    upload.main_category_id || matched?.id || null,
+      }).eq('id', uploadId)
+      // Queue a watermark/copy job for documents to appear in the Sales Library
+      await supabase.from('processing_queue').insert([
+        { upload_id: uploadId, job_type: 'watermark', status: 'pending' },
+      ])
+      return res.status(200).json({ category: aiSlug, matched: !!matched, type: 'document' })
+    }
+
+    // ── Images: categorized here, watermark handled by GitHub Actions ──
     await supabase.from('uploads').update({
-      processing_status:    'processing',
-      ai_main_category_id:  matched?.id || null,
-      main_category_id:     upload.main_category_id || matched?.id || null,
+      upload_status:       'completed',
+      processing_status:   'processing',   // GitHub Actions will set to 'completed'
+      ai_main_category_id: matched?.id || null,
+      main_category_id:    upload.main_category_id || matched?.id || null,
     }).eq('id', uploadId)
 
-    // Create watermark job
+    // Queue watermark job — picked up by GitHub Actions every 5 min
     await supabase.from('processing_queue').insert([
       { upload_id: uploadId, job_type: 'watermark', status: 'pending' },
     ])
 
-    return res.status(200).json({ category: aiSlug, matched: !!matched })
+    return res.status(200).json({ category: aiSlug, matched: !!matched, type: 'image' })
   } catch (err) {
     console.error('categorize error:', err)
     await supabase.from('uploads')

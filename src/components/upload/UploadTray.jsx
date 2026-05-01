@@ -7,6 +7,7 @@ const STATUS_ICON = {
   queued:     '⏳',
   uploading:  '⬆️',
   paused:     '⏸️',
+  uploaded:   '✅',
   completed:  '✅',
   failed:     '❌',
   processing: '⚙️',
@@ -16,6 +17,7 @@ const STATUS_COLOR = {
   queued:     'text-gray-500',
   uploading:  'text-blue-600',
   paused:     'text-yellow-600',
+  uploaded:   'text-green-600',
   completed:  'text-green-600',
   failed:     'text-red-600',
   processing: 'text-purple-600',
@@ -54,9 +56,12 @@ export default function UploadTray() {
           })
           break
         case 'COMPLETE':
-          update(event.uploadId, { status: 'processing', pct: 100 })
-          // Trigger AI categorization via Vercel API
+          update(event.uploadId, { status: 'uploaded', pct: 100 })
           triggerCategorize(event.uploadId, event.storagePath)
+          // Auto-dismiss the tray item after 8 seconds — processing is fully background
+          setTimeout(() => {
+            setItems(prev => { const n = { ...prev }; delete n[event.uploadId]; return n })
+          }, 8000)
           break
         case 'ERROR':
           update(event.uploadId, { status: 'failed', error: event.error })
@@ -89,8 +94,8 @@ export default function UploadTray() {
   const entries = Object.entries(items)
   if (entries.length === 0) return null
 
-  const activeCount = entries.filter(([, i]) => ['queued', 'uploading', 'paused', 'processing'].includes(i.status)).length
-  const allDone     = entries.every(([, i]) => i.status === 'completed' || i.status === 'failed')
+  const activeCount = entries.filter(([, i]) => ['queued', 'uploading', 'paused'].includes(i.status)).length
+  const allDone     = entries.every(([, i]) => ['completed', 'uploaded', 'failed'].includes(i.status))
 
   return (
     <div className="fixed bottom-4 right-4 w-80 bg-white rounded-2xl shadow-2xl border border-gray-200 z-50 overflow-hidden">
@@ -158,6 +163,12 @@ export default function UploadTray() {
                 </div>
               )}
 
+              {item.status === 'uploaded' && (
+                <div className="mt-1.5 space-y-0.5">
+                  <p className="text-xs text-green-600 font-medium">✅ Upload complete!</p>
+                  <p className="text-xs text-gray-400">AI processing happens in background — you can close the page safely.</p>
+                </div>
+              )}
               {item.status === 'processing' && (
                 <div className="mt-1.5 flex items-center gap-1.5">
                   <div className="w-3 h-3 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
