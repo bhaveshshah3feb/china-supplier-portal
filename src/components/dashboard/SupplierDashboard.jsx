@@ -42,11 +42,15 @@ export default function SupplierDashboard() {
 
   useEffect(() => {
     load()
-    // Realtime updates for processing status
+    // Realtime: UPDATE refreshes status on existing rows, INSERT adds new uploads
     const ch = supabase.channel('supplier_uploads')
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'uploads' },
         p => setUploads(prev => prev.map(u => u.id === p.new.id ? { ...u, ...p.new } : u))
-      ).subscribe()
+      )
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'uploads' },
+        () => load()   // re-fetch so we get joined category data too
+      )
+      .subscribe()
     return () => supabase.removeChannel(ch)
   }, [])
 
@@ -88,10 +92,10 @@ export default function SupplierDashboard() {
         <nav className="flex gap-0 max-w-5xl mx-auto">
           {[
             { key: 'upload',  icon: '⬆️', label: isZh ? '上传文件' : 'Upload Files' },
-            { key: 'uploads', icon: '📁', label: isZh ? '我的上传' : 'My Uploads' + (stats.total ? ` (${stats.total})` : '') },
+            { key: 'uploads', icon: '📁', label: isZh ? `我的上传${stats.total ? ` (${stats.total})` : ''}` : `My Uploads${stats.total ? ` (${stats.total})` : ''}` },
             { key: 'account', icon: '👤', label: isZh ? '账户信息' : 'Account' },
           ].map(({ key, icon, label }) => (
-            <button key={key} onClick={() => setTab(key)}
+            <button key={key} onClick={() => { setTab(key); if (key === 'uploads') load() }}
               className={`flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap
                 ${tab === key ? 'border-brand-600 text-brand-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
             >
@@ -169,10 +173,16 @@ export default function SupplierDashboard() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-gray-800">{isZh ? '我的上传记录' : 'My Uploads'} ({uploads.length})</h3>
-              <button onClick={() => setTab('upload')}
-                className="text-sm bg-brand-600 text-white px-4 py-2 rounded-lg hover:bg-brand-700 transition-colors">
-                + {isZh ? '上传更多' : 'Upload More'}
-              </button>
+              <div className="flex gap-2">
+                <button onClick={load}
+                  className="text-sm border border-gray-300 text-gray-600 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors">
+                  🔄 {isZh ? '刷新' : 'Refresh'}
+                </button>
+                <button onClick={() => setTab('upload')}
+                  className="text-sm bg-brand-600 text-white px-4 py-2 rounded-lg hover:bg-brand-700 transition-colors">
+                  + {isZh ? '上传更多' : 'Upload More'}
+                </button>
+              </div>
             </div>
 
             {uploads.length === 0 ? (
