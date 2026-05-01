@@ -39,13 +39,13 @@ async function main() {
 
   const { data: jobs, error } = await supabase
     .from('processing_queue')
-    .select('*, uploads(*, suppliers(supplier_code, company_name_en), main_categories(slug,name_en), sub_categories(slug,name_en))')
+    .select('*, uploads(*, suppliers(supplier_code, company_name_en), main_categories!main_category_id(slug,name_en), sub_categories!sub_category_id(slug,name_en))')
     .eq('status', 'pending')
     .lt('attempts', 3)
     .order('created_at')
     .limit(5)
 
-  if (error) { console.error('DB error:', error); return }
+  if (error) { console.error('DB error:', error); process.exit(1) }
   if (!jobs || jobs.length === 0) { console.log('No pending jobs. Done.'); return }
 
   console.log(`Found ${jobs.length} job(s)`)
