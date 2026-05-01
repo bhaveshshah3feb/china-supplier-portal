@@ -64,7 +64,7 @@ export default function SupplierDashboard() {
       const [{ data: sup, error: supErr }, { data: ups, error: upsErr }] = await Promise.all([
         supabase.from('suppliers').select('*').eq('id', user.id).single(),
         supabase.from('uploads')
-          .select('*, main_categories(name_en,name_zh), sub_categories(name_en,name_zh)')
+          .select('*, main_categories!main_category_id(name_en,name_zh), sub_categories!sub_category_id(name_en,name_zh)')
           .eq('supplier_id', user.id)
           .order('created_at', { ascending: false })
           .limit(100),
