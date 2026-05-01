@@ -39,6 +39,7 @@ export default function SupplierDashboard() {
   const [uploads,  setUploads]    = useState([])
   const [tab,      setTab]        = useState('upload')
   const [loading,  setLoading]    = useState(true)
+  const [loadErr,  setLoadErr]    = useState(null)
 
   useEffect(() => {
     load()
@@ -55,18 +56,30 @@ export default function SupplierDashboard() {
   }, [])
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
-    const [{ data: sup }, { data: ups }] = await Promise.all([
-      supabase.from('suppliers').select('*').eq('id', user.id).single(),
-      supabase.from('uploads')
-        .select('*, main_categories(name_en,name_zh), sub_categories(name_en,name_zh)')
-        .eq('supplier_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(100),
-    ])
-    setSupplier(sup)
-    setUploads(ups || [])
-    setLoading(false)
+    setLoadErr(null)
+    try {
+      const { data: { user }, error: authErr } = await supabase.auth.getUser()
+      if (authErr || !user) throw new Error('Not authenticated — ' + (authErr?.message || 'session expired'))
+
+      const [{ data: sup, error: supErr }, { data: ups, error: upsErr }] = await Promise.all([
+        supabase.from('suppliers').select('*').eq('id', user.id).single(),
+        supabase.from('uploads')
+          .select('*, main_categories(name_en,name_zh), sub_categories(name_en,name_zh)')
+          .eq('supplier_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(100),
+      ])
+
+      if (upsErr) throw new Error('Could not load uploads: ' + upsErr.message)
+
+      setSupplier(sup)
+      setUploads(ups || [])
+    } catch (e) {
+      console.error('load() failed:', e)
+      setLoadErr(e.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   if (loading) return (
@@ -171,6 +184,11 @@ export default function SupplierDashboard() {
         {/* ── My Uploads Tab ── */}
         {tab === 'uploads' && (
           <div className="space-y-4">
+            {loadErr && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                ⚠️ {loadErr}
+              </div>
+            )}
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-gray-800">{isZh ? '我的上传记录' : 'My Uploads'} ({uploads.length})</h3>
               <div className="flex gap-2">
