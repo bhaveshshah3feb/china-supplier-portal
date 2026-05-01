@@ -223,6 +223,11 @@ export default function Login() {
         </div>
 
       </div>
+
+      {/* Build stamp — bottom left */}
+      <div className="fixed bottom-2 left-3 text-white/30 text-[10px] font-mono select-none">
+        {__BUILD_HASH__} · {__BUILD_TIME__}
+      </div>
     </div>
   )
 }
