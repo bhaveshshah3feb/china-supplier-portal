@@ -114,31 +114,46 @@ async function processJob(job) {
       const { data: mainCats } = await supabase.from('main_categories').select('id,slug,name_en').eq('status','active')
       const catList = (mainCats||[]).map(c => `${c.slug} (${c.name_en})`).join(', ')
 
-      const imageBlocks = frames.map(fp => ({
-        type: 'image',
-        source: { type: 'base64', media_type: 'image/jpeg', data: readFileSync(fp).toString('base64') },
-      }))
+      // ── Claude Vision categorization (non-fatal if API fails) ──
+      let matched = null
+      try {
+        console.log('  API key present:', !!process.env.CLAUDE_API_KEY, '| key prefix:', process.env.CLAUDE_API_KEY?.slice(0, 14) || 'MISSING')
 
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-5',
-        max_tokens: 50,
-        messages: [{
-          role: 'user',
-          content: [
-            ...imageBlocks,
-            {
-              type: 'text',
-              text: `These are 3 frames from an amusement equipment video (at 10%, 50%, 90% of duration).
+        const imageBlocks = frames.map(fp => ({
+          type: 'image',
+          source: { type: 'base64', media_type: 'image/jpeg', data: readFileSync(fp).toString('base64') },
+        }))
+
+        const response = await anthropic.messages.create({
+          model: 'claude-sonnet-4-5',
+          max_tokens: 50,
+          messages: [{
+            role: 'user',
+            content: [
+              ...imageBlocks,
+              {
+                type: 'text',
+                text: `These are 3 frames from an amusement equipment video (at 10%, 50%, 90% of duration).
 Available categories: ${catList}
 Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy").`,
-            },
-          ],
-        }],
-      })
+              },
+            ],
+          }],
+        })
 
-      const aiSlug  = response.content[0]?.text?.trim().toLowerCase().replace(/[^a-z-]/g,'')
-      const matched = (mainCats||[]).find(c => c.slug === aiSlug)
-      console.log(`  AI category: ${aiSlug} (matched: ${!!matched})`)
+        const aiSlug = response.content[0]?.text?.trim().toLowerCase().replace(/[^a-z-]/g,'')
+        matched = (mainCats||[]).find(c => c.slug === aiSlug) || null
+        console.log(`  AI category: ${aiSlug} (matched: ${!!matched})`)
+
+      } catch (aiErr) {
+        // Log full details so we can diagnose the API key / model issue
+        console.error('  ⚠️  Claude API failed (will skip categorization):')
+        console.error('     name   :', aiErr.name)
+        console.error('     status :', aiErr.status)
+        console.error('     message:', aiErr.message)
+        if (aiErr.error)   console.error('     body   :', JSON.stringify(aiErr.error))
+        if (aiErr.headers) console.error('     cf-ray :', aiErr.headers?.['cf-ray'])
+      }
 
       await supabase.from('uploads').update({
         ai_main_category_id: matched?.id || null,
@@ -146,7 +161,7 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
         ai_confidence:       matched ? 0.9 : 0.3,
       }).eq('id', upload.id)
 
-      // Queue the watermark job
+      // Queue the watermark job regardless of whether AI categorization succeeded
       await supabase.from('processing_queue').insert([{
         upload_id: upload.id,
         job_type:  'watermark',
