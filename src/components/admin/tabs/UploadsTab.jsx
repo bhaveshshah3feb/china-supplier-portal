@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { supabase } from '../../../lib/supabase'
+import { supabase, getUploadSignedUrl } from '../../../lib/supabase'
 
 const PROC_BADGE = {
   pending:    'bg-gray-100 text-gray-600',
@@ -43,6 +43,15 @@ export default function UploadsTab() {
       setUploads([])
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function viewOriginal(upload) {
+    try {
+      const url = await getUploadSignedUrl(upload.storage_path)
+      window.open(url, '_blank')
+    } catch {
+      alert('Could not generate view link. The file may have been deleted.')
     }
   }
 
@@ -118,10 +127,16 @@ export default function UploadsTab() {
                       {new Date(u.created_at).toLocaleDateString()}
                     </td>
                     <td className="px-4 py-3">
-                      <button onClick={() => deleteUpload(u)}
-                        className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors">
-                        {t('admin.delete')}
-                      </button>
+                      <div className="flex gap-1">
+                        <button onClick={() => viewOriginal(u)}
+                          className="text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 px-2 py-1 rounded-lg transition-colors">
+                          View ↗
+                        </button>
+                        <button onClick={() => deleteUpload(u)}
+                          className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors">
+                          {t('admin.delete')}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase, getSalesUrl } from '../../../lib/supabase'
 
 function fmtBytes(b) {
@@ -10,20 +10,178 @@ function fmtBytes(b) {
 
 const TYPE_ICON = { video: '🎬', image: '🖼️', pricelist: '📊', document: '📄', other: '📁' }
 
+// ── Share Modal ───────────────────────────────────────────────
+function ShareModal({ file, onClose }) {
+  const url       = getSalesUrl(file.sales_path)
+  const filename  = file.display_name || file.original_filename
+  const fileType  = file.file_type
+  const sizeMB    = (file.file_size || 0) / 1024 / 1024
+
+  const [phone, setPhone]         = useState('')
+  const [email, setEmail]         = useState('')
+  const [caption, setCaption]     = useState(`Check out this amusement equipment from Aryana Amusements:\n\n${url}`)
+  const [waSending, setWaSending] = useState(false)
+  const [waResult, setWaResult]   = useState(null)  // null | 'ok' | string(err)
+  const [copied, setCopied]       = useState(false)
+
+  async function sendWhatsApp() {
+    if (!phone.trim()) return
+    setWaSending(true)
+    setWaResult(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/send-whatsapp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({
+          to_phone:  phone,
+          file_url:  url,
+          filename:  filename,
+          file_type: fileType,
+          caption:   caption,
+        }),
+      })
+      const body = await res.json()
+      if (body.success) {
+        setWaResult('ok')
+      } else {
+        setWaResult(body.error || 'Failed to send')
+      }
+    } catch {
+      setWaResult('Network error — check connection')
+    } finally {
+      setWaSending(false)
+    }
+  }
+
+  function openWaLink() {
+    const cleanPhone = phone.replace(/[^\d]/g, '')
+    const msg = encodeURIComponent(`${caption}\n\n${url}`)
+    window.open(`https://wa.me/${cleanPhone}?text=${msg}`, '_blank')
+  }
+
+  function openMailto() {
+    const subject = encodeURIComponent(`Amusement Equipment: ${filename}`)
+    const body = encodeURIComponent(
+      `Hi,\n\nPlease find the requested file below:\n\n${url}\n\n` +
+      (sizeMB < 20 ? 'You can download it directly from the link above.\n\n' : '') +
+      `File: ${filename}\nSize: ${fmtBytes(file.file_size)}\n\nBest regards,\nBhavesh — Aryana Amusements\n+91 9841081945`
+    )
+    window.open(`mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`)
+  }
+
+  async function copyLink() {
+    await navigator.clipboard.writeText(url)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+          <div>
+            <p className="font-semibold text-gray-800 truncate max-w-xs">{filename}</p>
+            <p className="text-xs text-gray-400">{fmtBytes(file.file_size)} · {file.suppliers?.company_name_en}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+        </div>
+
+        <div className="p-5 space-y-5">
+
+          {/* Quick actions */}
+          <div className="flex gap-2">
+            <button onClick={copyLink}
+              className="flex-1 flex items-center justify-center gap-1.5 bg-gray-100 text-gray-700 hover:bg-gray-200 px-3 py-2 rounded-lg text-sm transition-colors">
+              {copied ? '✓ Copied!' : '🔗 Copy Link'}
+            </button>
+            <a href={url} download={filename} target="_blank" rel="noreferrer"
+              className="flex-1 flex items-center justify-center gap-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 px-3 py-2 rounded-lg text-sm transition-colors">
+              ⬇ Download
+            </a>
+          </div>
+
+          {/* WhatsApp section */}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Share via WhatsApp</p>
+            <input
+              type="tel"
+              value={phone}
+              onChange={e => setPhone(e.target.value)}
+              placeholder="Phone number with country code (e.g. 919876543210)"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none"
+            />
+            <textarea
+              value={caption}
+              onChange={e => setCaption(e.target.value)}
+              rows={3}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none resize-none"
+            />
+            <div className="flex gap-2">
+              <button onClick={sendWhatsApp} disabled={waSending || !phone.trim()}
+                className="flex-1 bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors">
+                {waSending ? 'Sending…' : 'Send via API'}
+              </button>
+              <button onClick={openWaLink} disabled={!phone.trim()}
+                className="flex-1 border border-green-500 text-green-700 px-4 py-2 rounded-lg text-sm hover:bg-green-50 disabled:opacity-50 transition-colors">
+                Open WhatsApp ↗
+              </button>
+            </div>
+            {waResult === 'ok' && (
+              <p className="text-xs text-green-700 bg-green-50 px-3 py-2 rounded-lg">✓ Message sent successfully!</p>
+            )}
+            {waResult && waResult !== 'ok' && (
+              <p className="text-xs text-red-600 bg-red-50 px-3 py-2 rounded-lg">✗ {waResult}</p>
+            )}
+            <p className="text-[10px] text-gray-400">
+              "Send via API" uses your configured WhatsApp Business API and sends the file directly.<br />
+              "Open WhatsApp" opens the app/web with the message pre-filled (no API needed).
+            </p>
+          </div>
+
+          {/* Email section */}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Share via Email</p>
+            <input
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="customer@example.com"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+            />
+            <button onClick={openMailto} disabled={!email.trim()}
+              className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
+              Open in Email Client ↗
+            </button>
+            <p className="text-[10px] text-gray-400">
+              Opens your default email app with the file link pre-filled.
+              {sizeMB < 20 ? ' File is under 20 MB — you can attach it manually too.' : ' File is large — the link allows direct download.'}
+            </p>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Main Component ────────────────────────────────────────────
 export default function SalesLibraryTab() {
   const [files, setFiles]           = useState([])
   const [suppliers, setSuppliers]   = useState([])
   const [categories, setCategories] = useState([])
   const [loading, setLoading]       = useState(true)
-  const [view, setView]             = useState('grid')   // 'grid' | 'list'
+  const [view, setView]             = useState('grid')
   const [copied, setCopied]         = useState(null)
-  const [preview, setPreview]       = useState(null)     // upload object to preview
+  const [preview, setPreview]       = useState(null)
+  const [sharing, setSharing]       = useState(null)
 
-  const [filter, setFilter] = useState({
-    supplier: 'all',
-    category: 'all',
-    type: 'all',
-  })
+  const [filter, setFilter] = useState({ supplier: 'all', category: 'all', type: 'all' })
 
   useEffect(() => { loadMeta() }, [])
   useEffect(() => { load() }, [filter])
@@ -42,12 +200,11 @@ export default function SalesLibraryTab() {
     let q = supabase
       .from('uploads')
       .select(`
-        id, original_filename, display_name, file_type, file_size,
-        sales_path, processing_status, created_at, updated_at,
-        ai_confidence,
+        id, original_filename, display_name, file_type, file_size, mime_type,
+        sales_path, processing_status, created_at, updated_at, ai_confidence,
         suppliers(id, company_name_en, company_name_zh, supplier_code),
-        main_categories(id, name_en, name_zh),
-        sub_categories(id, name_en, name_zh)
+        main_categories!main_category_id(id, name_en, name_zh),
+        sub_categories!sub_category_id(id, name_en, name_zh)
       `)
       .eq('processing_status', 'completed')
       .not('sales_path', 'is', null)
@@ -79,7 +236,6 @@ export default function SalesLibraryTab() {
     setFiles(prev => prev.filter(f => f.id !== file.id))
   }
 
-  // Stats summary
   const stats = {
     total:  files.length,
     videos: files.filter(f => f.file_type === 'video').length,
@@ -91,14 +247,14 @@ export default function SalesLibraryTab() {
   return (
     <div className="space-y-5">
 
-      {/* Stats banner */}
+      {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {[
-          { label: 'Ready Files',  value: stats.total,  color: 'text-green-700', bg: 'bg-green-50' },
-          { label: 'Videos',       value: stats.videos, color: 'text-purple-700', bg: 'bg-purple-50' },
-          { label: 'Images',       value: stats.images, color: 'text-blue-700',   bg: 'bg-blue-50' },
-          { label: 'Documents',    value: stats.docs,   color: 'text-orange-700', bg: 'bg-orange-50' },
-          { label: 'Total Size',   value: stats.size,   color: 'text-gray-700',   bg: 'bg-gray-100' },
+          { label: 'Ready Files', value: stats.total,  color: 'text-green-700',  bg: 'bg-green-50' },
+          { label: 'Videos',      value: stats.videos, color: 'text-purple-700', bg: 'bg-purple-50' },
+          { label: 'Images',      value: stats.images, color: 'text-blue-700',   bg: 'bg-blue-50' },
+          { label: 'Documents',   value: stats.docs,   color: 'text-orange-700', bg: 'bg-orange-50' },
+          { label: 'Total Size',  value: stats.size,   color: 'text-gray-700',   bg: 'bg-gray-100' },
         ].map(s => (
           <div key={s.label} className={`rounded-xl p-3 text-center ${s.bg}`}>
             <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
@@ -112,16 +268,12 @@ export default function SalesLibraryTab() {
         <select value={filter.supplier} onChange={e => setFilter(f => ({ ...f, supplier: e.target.value }))}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-500 outline-none flex-1 min-w-40">
           <option value="all">All Suppliers</option>
-          {suppliers.map(s => (
-            <option key={s.id} value={s.id}>{s.company_name_en} ({s.supplier_code})</option>
-          ))}
+          {suppliers.map(s => <option key={s.id} value={s.id}>{s.company_name_en} ({s.supplier_code})</option>)}
         </select>
         <select value={filter.category} onChange={e => setFilter(f => ({ ...f, category: e.target.value }))}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-500 outline-none flex-1 min-w-40">
           <option value="all">All Categories</option>
-          {categories.map(c => (
-            <option key={c.id} value={c.id}>{c.name_en}</option>
-          ))}
+          {categories.map(c => <option key={c.id} value={c.id}>{c.name_en}</option>)}
         </select>
         <select value={filter.type} onChange={e => setFilter(f => ({ ...f, type: e.target.value }))}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-500 outline-none">
@@ -129,8 +281,6 @@ export default function SalesLibraryTab() {
             <option key={v} value={v}>{v === 'all' ? 'All Types' : v.charAt(0).toUpperCase() + v.slice(1) + 's'}</option>
           ))}
         </select>
-
-        {/* View toggle */}
         <div className="flex bg-gray-100 rounded-lg p-0.5 gap-0.5 ml-auto">
           {[['grid', '⊞'], ['list', '≡']].map(([v, icon]) => (
             <button key={v} onClick={() => setView(v)}
@@ -150,58 +300,50 @@ export default function SalesLibraryTab() {
           <p className="text-sm text-gray-400 mt-1">Files appear here once AI categorization and watermarking are complete</p>
         </div>
       ) : view === 'grid' ? (
-        /* ── Grid View ── */
+        /* ── Grid ── */
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
           {files.map(file => {
-            const url = getSalesUrl(file.sales_path)
+            const url   = getSalesUrl(file.sales_path)
             const isImg = file.file_type === 'image'
             const isVid = file.file_type === 'video'
             return (
-              <div key={file.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-md transition-shadow group">
+              <div key={file.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
                 {/* Thumbnail */}
                 <div className="aspect-video bg-gray-100 relative overflow-hidden cursor-pointer"
                   onClick={() => setPreview(file)}>
                   {isImg ? (
-                    <img src={url} alt={file.original_filename}
-                      className="w-full h-full object-cover"
+                    <img src={url} alt={file.original_filename} className="w-full h-full object-cover"
                       onError={e => { e.target.style.display = 'none' }} />
                   ) : (
                     <div className="w-full h-full flex flex-col items-center justify-center gap-1">
                       <span className="text-4xl">{TYPE_ICON[file.file_type] || '📁'}</span>
-                      {isVid && (
-                        <span className="text-xs bg-black/50 text-white px-2 py-0.5 rounded-full">
-                          ▶ Click to preview
-                        </span>
-                      )}
+                      {isVid && <span className="text-xs bg-black/50 text-white px-2 py-0.5 rounded-full">▶ Preview</span>}
                     </div>
                   )}
-                  {/* Supplier code badge */}
                   <div className="absolute top-1.5 left-1.5 bg-black/60 text-white text-[10px] font-mono px-1.5 py-0.5 rounded">
                     {file.suppliers?.supplier_code}
                   </div>
                 </div>
-
                 {/* Info */}
                 <div className="p-2.5 space-y-1">
-                  <p className="text-xs font-medium text-gray-800 truncate" title={file.original_filename}>
-                    {file.display_name || file.original_filename}
-                  </p>
+                  <p className="text-xs font-medium text-gray-800 truncate">{file.display_name || file.original_filename}</p>
                   <p className="text-[10px] text-gray-400 truncate">
-                    {file.main_categories?.name_en}
-                    {file.sub_categories && <> › {file.sub_categories.name_en}</>}
+                    {file.main_categories?.name_en}{file.sub_categories && <> › {file.sub_categories.name_en}</>}
                   </p>
                   <p className="text-[10px] text-gray-400">{file.suppliers?.company_name_en} · {fmtBytes(file.file_size)}</p>
-
-                  {/* Actions */}
                   <div className="flex gap-1 pt-1">
-                    <a href={url} target="_blank" rel="noreferrer"
-                      className="flex-1 text-center text-[10px] bg-blue-50 text-blue-600 hover:bg-blue-100 px-1.5 py-1 rounded transition-colors">
-                      Open ↗
-                    </a>
-                    <button onClick={() => copyUrl(file)}
-                      className="flex-1 text-[10px] bg-gray-50 text-gray-600 hover:bg-gray-100 px-1.5 py-1 rounded transition-colors">
-                      {copied === file.id ? '✓ Copied' : 'Copy URL'}
+                    <button onClick={() => setSharing(file)}
+                      className="flex-1 text-center text-[10px] bg-green-50 text-green-700 hover:bg-green-100 px-1.5 py-1 rounded transition-colors font-medium">
+                      Share
                     </button>
+                    <button onClick={() => setPreview(file)}
+                      className="flex-1 text-[10px] bg-blue-50 text-blue-600 hover:bg-blue-100 px-1.5 py-1 rounded transition-colors">
+                      Preview
+                    </button>
+                    <a href={url} download={file.display_name || file.original_filename} target="_blank" rel="noreferrer"
+                      className="flex-1 text-center text-[10px] bg-gray-50 text-gray-600 hover:bg-gray-100 px-1.5 py-1 rounded transition-colors">
+                      ⬇
+                    </a>
                     <button onClick={() => deleteFile(file)}
                       className="text-[10px] text-red-400 hover:text-red-600 hover:bg-red-50 px-1.5 py-1 rounded transition-colors">
                       🗑
@@ -213,7 +355,7 @@ export default function SalesLibraryTab() {
           })}
         </div>
       ) : (
-        /* ── List View ── */
+        /* ── List ── */
         <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -234,7 +376,7 @@ export default function SalesLibraryTab() {
                         <p className="font-medium text-gray-800 truncate">{file.display_name || file.original_filename}</p>
                         <p className="text-xs text-gray-400 font-mono">{file.suppliers?.supplier_code}</p>
                       </td>
-                      <td className="px-4 py-3 text-gray-600">{file.suppliers?.company_name_en}</td>
+                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{file.suppliers?.company_name_en}</td>
                       <td className="px-4 py-3 text-gray-500 text-xs">
                         <p>{file.main_categories?.name_en || '—'}</p>
                         {file.sub_categories && <p className="text-gray-400">{file.sub_categories.name_en}</p>}
@@ -244,15 +386,19 @@ export default function SalesLibraryTab() {
                         {new Date(file.updated_at).toLocaleDateString()}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          <a href={url} target="_blank" rel="noreferrer"
-                            className="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-2 py-1 rounded-lg transition-colors">
-                            Open ↗
-                          </a>
-                          <button onClick={() => copyUrl(file)}
-                            className="text-xs bg-gray-100 text-gray-600 hover:bg-gray-200 px-2 py-1 rounded-lg transition-colors">
-                            {copied === file.id ? '✓ Copied' : 'Copy URL'}
+                        <div className="flex gap-1 flex-wrap">
+                          <button onClick={() => setSharing(file)}
+                            className="text-xs bg-green-50 text-green-700 hover:bg-green-100 px-2 py-1 rounded-lg transition-colors font-medium">
+                            Share
                           </button>
+                          <button onClick={() => setPreview(file)}
+                            className="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-2 py-1 rounded-lg transition-colors">
+                            Preview
+                          </button>
+                          <a href={url} download={file.display_name || file.original_filename} target="_blank" rel="noreferrer"
+                            className="text-xs bg-gray-100 text-gray-600 hover:bg-gray-200 px-2 py-1 rounded-lg transition-colors">
+                            ⬇ Download
+                          </a>
                           <button onClick={() => deleteFile(file)}
                             className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors">
                             Delete
@@ -274,17 +420,13 @@ export default function SalesLibraryTab() {
           onClick={() => setPreview(null)}>
           <div className="bg-white rounded-2xl max-w-3xl w-full overflow-hidden shadow-2xl"
             onClick={e => e.stopPropagation()}>
-            {/* Header */}
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
               <div>
                 <p className="font-semibold text-gray-800 truncate max-w-xs">{preview.display_name || preview.original_filename}</p>
                 <p className="text-xs text-gray-400">{preview.suppliers?.company_name_en} · {preview.suppliers?.supplier_code}</p>
               </div>
-              <button onClick={() => setPreview(null)}
-                className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+              <button onClick={() => setPreview(null)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
             </div>
-
-            {/* Content */}
             <div className="bg-black flex items-center justify-center min-h-48 max-h-[70vh]">
               {preview.file_type === 'image' ? (
                 <img src={getSalesUrl(preview.sales_path)} alt={preview.original_filename}
@@ -295,36 +437,43 @@ export default function SalesLibraryTab() {
               ) : (
                 <div className="py-16 text-center text-white">
                   <div className="text-6xl mb-4">{TYPE_ICON[preview.file_type]}</div>
-                  <p className="text-gray-300">Preview not available for this file type</p>
+                  <p className="text-gray-300 mb-4">Preview not available for this file type</p>
                   <a href={getSalesUrl(preview.sales_path)} target="_blank" rel="noreferrer"
-                    className="mt-4 inline-block bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700">
+                    className="bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700">
                     Open File ↗
                   </a>
                 </div>
               )}
             </div>
-
-            {/* Footer */}
             <div className="flex items-center justify-between px-5 py-3 border-t border-gray-200">
               <div className="text-xs text-gray-500 space-x-4">
                 <span>{preview.main_categories?.name_en}{preview.sub_categories && ` › ${preview.sub_categories.name_en}`}</span>
                 <span>{fmtBytes(preview.file_size)}</span>
-                {preview.ai_confidence && <span>AI confidence: {Math.round(preview.ai_confidence * 100)}%</span>}
+                {preview.ai_confidence && <span>AI: {Math.round(preview.ai_confidence * 100)}%</span>}
               </div>
               <div className="flex gap-2">
-                <button onClick={() => copyUrl(preview)}
-                  className="text-sm bg-gray-100 text-gray-700 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition-colors">
-                  {copied === preview.id ? '✓ Copied!' : 'Copy URL'}
+                <button onClick={() => { setPreview(null); setSharing(preview) }}
+                  className="text-sm bg-green-50 text-green-700 hover:bg-green-100 px-3 py-1.5 rounded-lg transition-colors">
+                  Share
                 </button>
+                <a href={getSalesUrl(preview.sales_path)} download={preview.display_name || preview.original_filename}
+                  target="_blank" rel="noreferrer"
+                  className="text-sm bg-gray-100 text-gray-700 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition-colors">
+                  ⬇ Download
+                </a>
                 <a href={getSalesUrl(preview.sales_path)} target="_blank" rel="noreferrer"
                   className="text-sm bg-blue-600 text-white hover:bg-blue-700 px-3 py-1.5 rounded-lg transition-colors">
-                  Open Full Size ↗
+                  Open Full ↗
                 </a>
               </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* ── Share Modal ── */}
+      {sharing && <ShareModal file={sharing} onClose={() => setSharing(null)} />}
+
     </div>
   )
 }

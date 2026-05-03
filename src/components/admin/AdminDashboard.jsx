@@ -8,6 +8,7 @@ import ProcessingTab   from './tabs/ProcessingTab'
 import CategoriesTab   from './tabs/CategoriesTab'
 import LogsTab         from './tabs/LogsTab'
 import SalesLibraryTab from './tabs/SalesLibraryTab'
+import SettingsTab     from './tabs/SettingsTab'
 
 const TABS = [
   { key: 'overview',     icon: '📊', label: 'Overview' },
@@ -17,6 +18,7 @@ const TABS = [
   { key: 'processing',   icon: '⚙️',  label: 'Processing' },
   { key: 'categories',   icon: '🗂️',  label: 'Categories' },
   { key: 'logs',         icon: '📋', label: 'Logs' },
+  { key: 'settings',     icon: '⚙',  label: 'Settings' },
 ]
 
 function fmtBytes(b) {
@@ -262,6 +264,7 @@ export default function AdminDashboard() {
         {tab === 'processing' && <ProcessingTab />}
         {tab === 'categories' && <CategoriesTab />}
         {tab === 'logs'       && <LogsTab />}
+        {tab === 'settings'   && <SettingsTab />}
 
       </div>
     </div>
