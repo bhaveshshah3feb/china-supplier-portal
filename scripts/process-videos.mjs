@@ -208,12 +208,12 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
 
       const vf = [
         `drawbox=x=0:y=0:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
-        `drawbox=x=(iw-${cW}):y=0:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
-        `drawbox=x=0:y=(ih-${cH}):w=${cW}:h=${cH}:color=black@0.75:t=fill`,
-        `drawbox=x=(iw-${cW}):y=(ih-${cH}):w=${cW}:h=${cH}:color=black@0.75:t=fill`,
+        `drawbox=x=W-${cW}:y=0:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
+        `drawbox=x=0:y=H-${cH}:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
+        `drawbox=x=W-${cW}:y=H-${cH}:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
         `drawtext=text='${escapedName}':x=10:y=10:fontsize=26:fontcolor=white:shadowx=2:shadowy=2`,
-        `drawtext=text='${escapedPhone}':x=10:y=(ih-38):fontsize=22:fontcolor=yellow@0.95:shadowx=2:shadowy=2`,
-        `drawtext=text='SRC: ${escapedCode}':x=(iw-${cW-10}):y=(ih-24):fontsize=13:fontcolor=white@0.55`,
+        `drawtext=text='${escapedPhone}':x=10:y=H-38:fontsize=22:fontcolor=yellow@0.95:shadowx=2:shadowy=2`,
+        `drawtext=text='SRC: ${escapedCode}':x=W-${cW-10}:y=H-24:fontsize=13:fontcolor=white@0.55`,
       ].join(',')
 
       // Different output format + FFmpeg flags for images vs videos
