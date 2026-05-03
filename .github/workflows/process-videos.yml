@@ -7,6 +7,8 @@ on:
   workflow_dispatch:
     # Also allows manual trigger from GitHub Actions UI
 
+  # Force fresh checkout: 2026-05-03T00:00:00Z
+
 jobs:
   process:
     runs-on: ubuntu-latest
