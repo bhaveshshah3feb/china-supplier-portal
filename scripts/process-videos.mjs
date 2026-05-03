@@ -181,9 +181,10 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       if (upload.file_type === 'document' || upload.file_type === 'pricelist') {
         console.log('  Document/pricelist — copying to sales without watermark')
         const salesFilename = `${catSlug}/${upload.id}_${supplierCode}${origExt}`
+        const docBuffer = buffer || readFileSync(tmpInput)
         const { error: upErr } = await supabase.storage
           .from('sales')
-          .upload(salesFilename, buffer || readFileSync(tmpInput), {
+          .upload(salesFilename, docBuffer, {
             contentType: upload.mime_type || 'application/octet-stream',
             upsert: true,
           })
@@ -199,35 +200,52 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       console.log(`  Applying watermarks (SRC: ${supplierCode}, type: ${isImage ? 'image' : 'video'})...`)
 
       const cW = WM.cornerW, cH = WM.cornerH
+
+      // Escape text values for FFmpeg drawtext filter
+      const escapedName = WM.name.replace(/'/g, "\\'")
+      const escapedPhone = WM.phone.replace(/'/g, "\\'")
+      const escapedCode = supplierCode.replace(/'/g, "\\'")
+
       const vf = [
         `drawbox=x=0:y=0:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
         `drawbox=x=iw-${cW}:y=0:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
         `drawbox=x=0:y=ih-${cH}:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
         `drawbox=x=iw-${cW}:y=ih-${cH}:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
-        `drawtext=text='${WM.name}':x=10:y=10:fontsize=26:fontcolor=white:shadowx=2:shadowy=2`,
-        `drawtext=text='${WM.phone}':x=10:y=ih-38:fontsize=22:fontcolor=yellow@0.95:shadowx=2:shadowy=2`,
-        `drawtext=text='SRC\\: ${supplierCode}':x=iw-${cW-10}:y=ih-24:fontsize=13:fontcolor=white@0.55`,
+        `drawtext=text='${escapedName}':x=10:y=10:fontsize=26:fontcolor=white:shadowx=2:shadowy=2`,
+        `drawtext=text='${escapedPhone}':x=10:y=ih-38:fontsize=22:fontcolor=yellow@0.95:shadowx=2:shadowy=2`,
+        `drawtext=text='SRC: ${escapedCode}':x=iw-${cW-10}:y=ih-24:fontsize=13:fontcolor=white@0.55`,
       ].join(',')
 
       // Different output format + FFmpeg flags for images vs videos
       const salesExt  = isImage ? (origExt || '.jpg') : '.mp4'
       const tmpOutput = join(TMP, `output_${jobId}${salesExt}`)
 
-      if (isImage) {
-        // Single frame — no video codec, no audio stream
-        await execAsync(
-          `ffmpeg -i "${tmpInput}" -vf "${vf}" -frames:v 1 "${tmpOutput}" -y`,
-          { maxBuffer: 1024 * 1024 * 100 }
-        )
-      } else {
-        // Video — re-encode H.264
-        await execAsync(
-          `ffmpeg -i "${tmpInput}" -vf "${vf}" -c:v libx264 -crf 23 -preset fast -c:a copy "${tmpOutput}" -y`,
-          { maxBuffer: 1024 * 1024 * 100 }
-        )
+      try {
+        if (isImage) {
+          // Single frame — no video codec, no audio stream
+          console.log('  Running FFmpeg for image watermark...')
+          await execAsync(
+            `ffmpeg -i "${tmpInput}" -vf "${vf}" -frames:v 1 "${tmpOutput}" -y`,
+            { maxBuffer: 1024 * 1024 * 100 }
+          )
+        } else {
+          // Video — re-encode H.264
+          console.log('  Running FFmpeg for video watermark...')
+          await execAsync(
+            `ffmpeg -i "${tmpInput}" -vf "${vf}" -c:v libx264 -crf 23 -preset fast -c:a copy "${tmpOutput}" -y`,
+            { maxBuffer: 1024 * 1024 * 100 }
+          )
+        }
+        console.log('  Watermark applied')
+      } catch (ffErr) {
+        console.error('  FFmpeg error:', ffErr.message)
+        console.error('  Filter string:', vf)
+        throw new Error(`FFmpeg failed: ${ffErr.message}`)
       }
 
-      console.log('  Watermark applied')
+      if (!existsSync(tmpOutput)) {
+        throw new Error(`FFmpeg output file not created: ${tmpOutput}`)
+      }
 
       const salesFilename = `${catSlug}/${upload.id}_${supplierCode}${salesExt}`
       const outputBuffer  = readFileSync(tmpOutput)

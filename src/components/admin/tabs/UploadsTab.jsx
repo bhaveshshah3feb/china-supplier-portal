@@ -27,16 +27,23 @@ export default function UploadsTab() {
 
   async function load() {
     setLoading(true)
-    let q = supabase.from('uploads')
-      .select(`*, suppliers(company_name_en, supplier_code), main_categories(name_en), sub_categories(name_en)`)
-      .order('created_at', { ascending: false })
-      .limit(200)
+    try {
+      let q = supabase.from('uploads')
+        .select(`*, suppliers(company_name_en, supplier_code), main_categories!main_category_id(name_en), sub_categories!sub_category_id(name_en)`)
+        .order('created_at', { ascending: false })
+        .limit(200)
 
-    if (filter.type !== 'all')   q = q.eq('file_type', filter.type)
-    if (filter.status !== 'all') q = q.eq('processing_status', filter.status)
-    const { data } = await q
-    setUploads(data || [])
-    setLoading(false)
+      if (filter.type !== 'all')   q = q.eq('file_type', filter.type)
+      if (filter.status !== 'all') q = q.eq('processing_status', filter.status)
+      const { data, error } = await q
+      if (error) throw new Error(`Database error: ${error.message}`)
+      setUploads(data || [])
+    } catch (err) {
+      console.error('Load failed:', err)
+      setUploads([])
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function deleteUpload(upload) {
