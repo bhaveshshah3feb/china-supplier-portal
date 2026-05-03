@@ -1,12 +1,12 @@
 import * as tus from 'tus-js-client'
+import { supabase } from './supabase.js'
 
 const SUPABASE_URL    = import.meta.env.VITE_SUPABASE_URL
 const TUS_ENDPOINT    = `${SUPABASE_URL}/storage/v1/upload/resumable`
-const CHUNK_SIZE      = 6 * 1024 * 1024   // 6 MB chunks
+const CHUNK_SIZE      = 6 * 1024 * 1024
 const MAX_CONCURRENT  = 3
 const RETRY_DELAYS    = [0, 3000, 8000, 15000]
 
-// Active tus.Upload instances keyed by uploadId
 const active = new Map()
 
 let listeners = []
@@ -17,8 +17,6 @@ export function addListener(fn) {
 function emit(event) {
   listeners.forEach(fn => fn(event))
 }
-
-// ── Format helpers ────────────────────────────────────────────
 
 export function formatBytes(bytes) {
   if (bytes === 0) return '0 B'
@@ -36,8 +34,6 @@ export function formatEta(bytesLeft, speed) {
   return `${(secs / 3600).toFixed(1)}h`
 }
 
-// ── Detect file type from mime ─────────────────────────────────
-
 export function detectFileType(file) {
   const mime = file.type || ''
   if (mime.startsWith('video/'))       return 'video'
@@ -49,9 +45,7 @@ export function detectFileType(file) {
   return 'document'
 }
 
-// ── Queue management ──────────────────────────────────────────
-
-let queue = []   // items waiting to start
+let queue   = []
 let running = 0
 
 function tryDequeue() {
@@ -68,9 +62,7 @@ export function enqueue(item) {
   tryDequeue()
 }
 
-// ── Core TUS upload ───────────────────────────────────────────
-
-function _startTus({ uploadId, file, storagePath, accessToken, bucketName = 'uploads' }) {
+function _startTus({ uploadId, file, storagePath, accessToken, dbId, bucketName = 'uploads' }) {
   let lastBytes = 0
   let lastTime  = Date.now()
   let speed     = 0
@@ -95,43 +87,63 @@ function _startTus({ uploadId, file, storagePath, accessToken, bucketName = 'upl
     },
 
     onProgress(bytesUploaded, bytesTotal) {
-      const now    = Date.now()
-      const dt     = (now - lastTime) / 1000
+      const now   = Date.now()
+      const dt    = (now - lastTime) / 1000
       if (dt > 0.5) {
         speed     = (bytesUploaded - lastBytes) / dt
         lastBytes = bytesUploaded
         lastTime  = now
       }
-      const pct     = Math.round((bytesUploaded / bytesTotal) * 100)
+      const pct      = Math.round((bytesUploaded / bytesTotal) * 100)
       const bytesLeft = bytesTotal - bytesUploaded
       emit({ type: 'PROGRESS', uploadId, pct, bytesUploaded, bytesTotal, speed, eta: formatEta(bytesLeft, speed) })
     },
 
-    onSuccess() {
+    async onSuccess() {
       active.delete(uploadId)
       running--
       emit({ type: 'COMPLETE', uploadId, storagePath })
       tryDequeue()
+
+      // ── Mark upload completed in DB and create processing job ──
+      if (dbId) {
+        try {
+          await supabase
+            .from('uploads')
+            .update({ upload_status: 'completed' })
+            .eq('id', dbId)
+
+          await supabase
+            .from('processing_queue')
+            .insert({ upload_id: dbId, job_type: 'categorize', status: 'pending' })
+        } catch (err) {
+          console.error('Failed to update upload status after TUS success:', err)
+        }
+      }
     },
 
     onError(err) {
       active.delete(uploadId)
       running--
       emit({ type: 'ERROR', uploadId, error: err.message || String(err) })
+      // Mark as failed in DB
+      if (dbId) {
+        supabase.from('uploads')
+          .update({ upload_status: 'failed', error_message: err.message || String(err) })
+          .eq('id', dbId)
+          .then(() => {})
+      }
       tryDequeue()
     },
   })
 
   active.set(uploadId, upload)
 
-  // Resume if previous upload exists
   upload.findPreviousUploads().then(prev => {
     if (prev.length > 0) upload.resumeFromPreviousUpload(prev[0])
     upload.start()
   })
 }
-
-// ── Controls ──────────────────────────────────────────────────
 
 export function pauseUpload(uploadId) {
   const u = active.get(uploadId)

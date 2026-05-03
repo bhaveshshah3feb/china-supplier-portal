@@ -33,9 +33,55 @@ const WM = {
   cornerH: 80,
 }
 
+// ── Auto-heal: queue uploads that never got a processing job ─
+async function autoQueueOrphans() {
+  // Any upload stuck at 'uploading' for > 20 minutes is considered complete
+  // (TUS finished but the DB callback never fired — common on mobile/slow networks)
+  const cutoff = new Date(Date.now() - 20 * 60 * 1000).toISOString()
+
+  const { data: candidates } = await supabase
+    .from('uploads')
+    .select('id, upload_status')
+    .eq('processing_status', 'pending')
+    .or(`upload_status.eq.completed,and(upload_status.eq.uploading,created_at.lt.${cutoff})`)
+    .limit(100)
+
+  if (!candidates?.length) return
+
+  const ids = candidates.map(u => u.id)
+
+  // Check which ones already have a categorize job
+  const { data: existing } = await supabase
+    .from('processing_queue')
+    .select('upload_id')
+    .in('upload_id', ids)
+    .eq('job_type', 'categorize')
+
+  const alreadyQueued = new Set((existing || []).map(j => j.upload_id))
+  const toQueue   = candidates.filter(u => !alreadyQueued.has(u.id))
+  const toComplete = toQueue.filter(u => u.upload_status === 'uploading')
+
+  if (!toQueue.length) return
+
+  console.log(`Auto-queuing ${toQueue.length} orphaned upload(s) (${toComplete.length} were stuck at 'uploading')`)
+
+  // Mark stuck 'uploading' uploads as completed
+  if (toComplete.length) {
+    await supabase.from('uploads')
+      .update({ upload_status: 'completed' })
+      .in('id', toComplete.map(u => u.id))
+  }
+
+  // Create categorize jobs
+  await supabase.from('processing_queue').insert(
+    toQueue.map(u => ({ upload_id: u.id, job_type: 'categorize', status: 'pending' }))
+  )
+}
+
 // ── Main ─────────────────────────────────────────────────────
 async function main() {
   console.log('Checking for pending jobs...')
+  await autoQueueOrphans()
 
   const { data: jobs, error } = await supabase
     .from('processing_queue')

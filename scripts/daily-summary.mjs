@@ -8,6 +8,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js'
+import nodemailer from 'nodemailer'
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -240,21 +241,19 @@ async function sendWhatsApp(phoneNumberId, accessToken, toPhone, message) {
   return data.messages?.[0]?.id
 }
 
-// ── Send Email via Resend ─────────────────────────────────────
-async function sendEmail(resendKey, toEmail, subject, html) {
-  const res = await fetch('https://api.resend.com/emails', {
-    method:  'POST',
-    headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from:    'Aryan Amusements Portal <notifications@yourdomain.com>',
-      to:      [toEmail],
-      subject,
-      html,
-    }),
+// ── Send Email via Gmail SMTP ─────────────────────────────────
+async function sendEmail(gmailUser, gmailAppPassword, toEmail, subject, html) {
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: gmailUser, pass: gmailAppPassword },
   })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data?.message || 'Resend API error')
-  return data.id
+  const info = await transporter.sendMail({
+    from:    `"Aryan Amusements Portal" <${gmailUser}>`,
+    to:      toEmail,
+    subject,
+    html,
+  })
+  return info.messageId
 }
 
 // ── Main ──────────────────────────────────────────────────────
@@ -266,11 +265,12 @@ async function main() {
 
   console.log(`Stats: ${stats.uploads.length} uploads, ${stats.processedCount} processed, ${stats.failedCount} failed`)
 
-  const waPhone  = cfg.notification_whatsapp || '919841081945'
-  const email    = cfg.notification_email    || 'bhavesh.shah@gamesnmore.co.in'
-  const waId     = cfg.whatsapp_phone_number_id
-  const waToken  = cfg.whatsapp_access_token
-  const resendKey= cfg.resend_api_key || process.env.RESEND_API_KEY
+  const waPhone       = cfg.notification_whatsapp || '919841081945'
+  const email         = cfg.notification_email    || 'bhavesh.shah@gamesnmore.co.in'
+  const waId          = cfg.whatsapp_phone_number_id
+  const waToken       = cfg.whatsapp_access_token
+  const gmailUser     = cfg.gmail_user     || process.env.GMAIL_USER
+  const gmailPassword = cfg.gmail_app_password || process.env.GMAIL_APP_PASSWORD
 
   // ── WhatsApp ─────────────────────────────────────────────
   if (waId && waToken) {
@@ -285,18 +285,18 @@ async function main() {
     console.log('WhatsApp credentials not configured — skipping')
   }
 
-  // ── Email ─────────────────────────────────────────────────
-  if (resendKey) {
+  // ── Email via Gmail ───────────────────────────────────────
+  if (gmailUser && gmailPassword) {
     try {
       const html    = buildEmailHtml(stats)
       const subject = `Daily Summary: ${stats.uploads.length} uploads · ${stats.processedCount} processed — ${stats.date}`
-      const emailId = await sendEmail(resendKey, email, subject, html)
-      console.log(`Email sent: ${emailId}`)
+      const msgId   = await sendEmail(gmailUser, gmailPassword, email, subject, html)
+      console.log(`Email sent: ${msgId}`)
     } catch (err) {
       console.error('Email failed:', err.message)
     }
   } else {
-    console.log('RESEND_API_KEY not set — skipping email')
+    console.log('GMAIL_USER / GMAIL_APP_PASSWORD not set — skipping email')
   }
 
   console.log('Daily summary complete.')

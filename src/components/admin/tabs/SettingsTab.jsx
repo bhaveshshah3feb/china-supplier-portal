@@ -4,23 +4,30 @@ import { supabase } from '../../../lib/supabase'
 const NOTIFICATION_KEYS = [
   {
     key:         'notification_email',
-    label:       'Notification Email',
+    label:       'Send Summary To (Email)',
     placeholder: 'bhavesh.shah@gamesnmore.co.in',
-    help:        'Daily summary report is sent to this email address',
+    help:        'Daily summary is sent to this address',
     type:        'email',
   },
   {
     key:         'notification_whatsapp',
-    label:       'Notification WhatsApp',
+    label:       'Send Summary To (WhatsApp)',
     placeholder: '919841081945',
-    help:        'Digits only, no + (e.g. 919841081945 for +91 9841081945)',
+    help:        'Digits only, no + prefix (e.g. 919841081945 for +91 9841081945)',
     type:        'text',
   },
   {
-    key:         'resend_api_key',
-    label:       'Resend API Key',
-    placeholder: 're_xxxxxxxxxxxx',
-    help:        'Get a free key at resend.com — needed for email delivery',
+    key:         'gmail_user',
+    label:       'Gmail Sender Address',
+    placeholder: 'bhavesh.shah@gamesnmore.co.in',
+    help:        'The Gmail / Google Workspace address used to send the daily email',
+    type:        'email',
+  },
+  {
+    key:         'gmail_app_password',
+    label:       'Gmail App Password',
+    placeholder: 'xxxx xxxx xxxx xxxx',
+    help:        'Google Account → Security → 2-Step Verification → App Passwords → Mail',
     type:        'password',
   },
 ]
