@@ -100,7 +100,7 @@ function ShareModal({ file, onClose }) {
               className="flex-1 flex items-center justify-center gap-1.5 bg-gray-100 text-gray-700 hover:bg-gray-200 px-3 py-2 rounded-lg text-sm transition-colors">
               {copied ? '✓ Copied!' : '🔗 Copy Link'}
             </button>
-            <a href={url} download={filename} target="_blank" rel="noreferrer"
+            <a href={getSalesUrl(file.sales_path, { download: true, filename })} target="_blank" rel="noreferrer"
               className="flex-1 flex items-center justify-center gap-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 px-3 py-2 rounded-lg text-sm transition-colors">
               ⬇ Download
             </a>
@@ -395,7 +395,7 @@ export default function SalesLibraryTab() {
                             className="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-2 py-1 rounded-lg transition-colors">
                             Preview
                           </button>
-                          <a href={url} download={file.display_name || file.original_filename} target="_blank" rel="noreferrer"
+                          <a href={getSalesUrl(file.sales_path, { download: true, filename: file.display_name || file.original_filename })} target="_blank" rel="noreferrer"
                             className="text-xs bg-gray-100 text-gray-600 hover:bg-gray-200 px-2 py-1 rounded-lg transition-colors">
                             ⬇ Download
                           </a>
@@ -456,7 +456,7 @@ export default function SalesLibraryTab() {
                   className="text-sm bg-green-50 text-green-700 hover:bg-green-100 px-3 py-1.5 rounded-lg transition-colors">
                   Share
                 </button>
-                <a href={getSalesUrl(preview.sales_path)} download={preview.display_name || preview.original_filename}
+                <a href={getSalesUrl(preview.sales_path, { download: true, filename: preview.display_name || preview.original_filename })}
                   target="_blank" rel="noreferrer"
                   className="text-sm bg-gray-100 text-gray-700 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition-colors">
                   ⬇ Download

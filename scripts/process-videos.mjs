@@ -27,7 +27,7 @@ if (!existsSync(TMP)) mkdirSync(TMP, { recursive: true })
 
 // ── Watermark config ─────────────────────────────────────────
 const WM = {
-  name:    'Bhavesh - Aryana Amusements',
+  name:    'Bhavesh - Aryan Amusements',
   phone:   '+91 9841081945',
   cornerW: 260,
   cornerH: 80,
@@ -155,10 +155,42 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
         if (aiErr.headers) console.error('     cf-ray :', aiErr.headers?.['cf-ray'])
       }
 
+      // ── AI game name extraction ────────────────────────────
+      let aiGameName = null
+      if (frames.length > 0) {
+        try {
+          const nameResponse = await anthropic.messages.create({
+            model: 'claude-haiku-4-5',
+            max_tokens: 60,
+            messages: [{
+              role: 'user',
+              content: [
+                {
+                  type:   'image',
+                  source: { type: 'base64', media_type: 'image/jpeg', data: readFileSync(frames[0]).toString('base64') },
+                },
+                {
+                  type: 'text',
+                  text: 'This is a frame from an amusement/arcade game video. The game name is usually displayed prominently on the top panel or marquee of the machine. Reply with ONLY the game name (e.g. "Street Fighter II" or "Big Bass Wheel"). If no specific name is visible, reply "Unknown".',
+                },
+              ],
+            }],
+          })
+          const raw = nameResponse.content[0]?.text?.trim()
+          if (raw && raw !== 'Unknown' && raw.length > 1 && raw.length < 80) {
+            aiGameName = raw
+            console.log(`  AI game name: ${aiGameName}`)
+          }
+        } catch (nameErr) {
+          console.warn('  Could not extract game name:', nameErr.message)
+        }
+      }
+
       await supabase.from('uploads').update({
         ai_main_category_id: matched?.id || null,
         main_category_id:    upload.main_category_id || matched?.id || null,
         ai_confidence:       matched ? 0.9 : 0.3,
+        ai_game_name:        aiGameName,
       }).eq('id', upload.id)
 
       // Queue the watermark job regardless of whether AI categorization succeeded
@@ -207,13 +239,16 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       const escapedCode = supplierCode.replace(/'/g, "\\'")
 
       const vf = [
+        // Top-left box: company name
         `drawbox=x=0:y=0:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
+        // Top-right box: phone number
         `drawbox=x=iw-${cW}:y=0:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
-        `drawbox=x=0:y=ih-${cH}:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
+        // Bottom-right box: SRC code
         `drawbox=x=iw-${cW}:y=ih-${cH}:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
-        `drawtext=text='${escapedName}':x=10:y=10:fontsize=26:fontcolor=white:shadowx=2:shadowy=2`,
-        `drawtext=text='${escapedPhone}':x=10:y=H-38:fontsize=22:fontcolor=yellow@0.95:shadowx=2:shadowy=2`,
-        `drawtext=text='SRC: ${escapedCode}':x=W-${cW-10}:y=H-24:fontsize=13:fontcolor=white@0.55`,
+        // Text overlays
+        `drawtext=text='${escapedName}':x=10:y=10:fontsize=22:fontcolor=white:shadowx=2:shadowy=2`,
+        `drawtext=text='${escapedPhone}':x=W-${cW-10}:y=10:fontsize=20:fontcolor=yellow@0.95:shadowx=2:shadowy=2`,
+        `drawtext=text='SRC\\: ${escapedCode}':x=W-${cW-10}:y=H-24:fontsize=13:fontcolor=white@0.55`,
       ].join(',')
 
       // Different output format + FFmpeg flags for images vs videos

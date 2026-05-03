@@ -9,10 +9,12 @@ import CategoriesTab   from './tabs/CategoriesTab'
 import LogsTab         from './tabs/LogsTab'
 import SalesLibraryTab from './tabs/SalesLibraryTab'
 import SettingsTab     from './tabs/SettingsTab'
+import RenameTab      from './tabs/RenameTab'
 
 const TABS = [
   { key: 'overview',     icon: '📊', label: 'Overview' },
   { key: 'library',      icon: '✅', label: 'Sales Library' },
+  { key: 'rename',       icon: '✏️',  label: 'Rename / Edit' },
   { key: 'suppliers',    icon: '🏭', label: 'Suppliers' },
   { key: 'uploads',      icon: '📁', label: 'Uploads' },
   { key: 'processing',   icon: '⚙️',  label: 'Processing' },
@@ -259,6 +261,7 @@ export default function AdminDashboard() {
         )}
 
         {tab === 'library'    && <SalesLibraryTab />}
+        {tab === 'rename'     && <RenameTab />}
         {tab === 'suppliers'  && <SuppliersTab />}
         {tab === 'uploads'    && <UploadsTab />}
         {tab === 'processing' && <ProcessingTab />}

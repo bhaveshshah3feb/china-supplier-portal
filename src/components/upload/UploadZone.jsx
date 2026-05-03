@@ -1,11 +1,11 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { supabase } from '../../lib/supabase'
 import { enqueue, detectFileType } from '../../lib/uploadManager'
 import { getUploadPath } from '../../lib/supabase'
 import CategorySelect from './CategorySelect'
 
-const ALLOWED_TYPES = [
+const ACCEPT = [
   'video/mp4','video/quicktime','video/x-msvideo','video/x-matroska',
   'video/x-flv','video/x-ms-wmv','video/webm',
   'image/jpeg','image/png','image/gif','image/webp','image/bmp',
@@ -15,22 +15,24 @@ const ALLOWED_TYPES = [
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/msword',
 ]
+// accept string for the file input — tells mobile pickers what to show
+const ACCEPT_ATTR = 'video/*,image/*,application/pdf,.xlsx,.xls,.csv,.docx,.doc'
 
 export default function UploadZone({ onUploadsStarted }) {
   const { t } = useTranslation()
-  const [dragging, setDragging]   = useState(false)
-  const [files, setFiles]         = useState([])   // staged, not yet uploading
-  const [category, setCategory]   = useState({ mainCategoryId: null, subCategoryId: null })
-  const [error, setError]         = useState('')
-  const inputRef = useRef()
+  const [dragging, setDragging] = useState(false)
+  const [files, setFiles]       = useState([])
+  const [category, setCategory] = useState({ mainCategoryId: null, subCategoryId: null })
+  const [error, setError]       = useState('')
 
   const addFiles = useCallback((incoming) => {
-    const valid = Array.from(incoming).filter(f => ALLOWED_TYPES.includes(f.type))
+    const valid = Array.from(incoming).filter(f => ACCEPT.includes(f.type))
     setFiles(prev => [...prev, ...valid.map(f => ({ file: f, id: `${f.name}-${f.size}-${Date.now()}` }))])
   }, [])
 
   function onDrop(e) {
-    e.preventDefault(); setDragging(false)
+    e.preventDefault()
+    setDragging(false)
     addFiles(e.dataTransfer.files)
   }
 
@@ -50,24 +52,21 @@ export default function UploadZone({ onUploadsStarted }) {
     for (const { file, id } of files) {
       const fileType    = detectFileType(file)
       const storagePath = getUploadPath(user.id, fileType, file.name)
-      const uploadId    = id
 
-      // Create DB record
       const { data: record } = await supabase.from('uploads').insert({
-        supplier_id:      user.id,
+        supplier_id:       user.id,
         original_filename: file.name,
-        file_type:        fileType,
-        mime_type:        file.type,
-        file_size:        file.size,
-        storage_path:     storagePath,
-        upload_status:    'uploading',
-        processing_status:'pending',
-        main_category_id: category.mainCategoryId,
-        sub_category_id:  category.subCategoryId,
+        file_type:         fileType,
+        mime_type:         file.type,
+        file_size:         file.size,
+        storage_path:      storagePath,
+        upload_status:     'uploading',
+        processing_status: 'pending',
+        main_category_id:  category.mainCategoryId,
+        sub_category_id:   category.subCategoryId,
       }).select().single()
 
-      // Enqueue in TUS manager
-      enqueue({ uploadId, file, storagePath, accessToken, dbId: record?.id, supplierId: user.id, category })
+      enqueue({ uploadId: id, file, storagePath, accessToken, dbId: record?.id, supplierId: user.id, category })
     }
 
     if (onUploadsStarted) onUploadsStarted(files.length)
@@ -77,29 +76,31 @@ export default function UploadZone({ onUploadsStarted }) {
 
   return (
     <div className="space-y-5">
-      {/* Drop Zone */}
-      <div
+      {/* Drop Zone — drag handles drop, label handles tap on mobile */}
+      <label
+        htmlFor="file-upload-input"
         onDragOver={e => { e.preventDefault(); setDragging(true) }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
-        onClick={() => inputRef.current?.click()}
-        className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors
+        className={`block border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors
           ${dragging ? 'border-brand-500 bg-brand-50' : 'border-gray-300 hover:border-brand-400 hover:bg-gray-50'}`}
       >
         <div className="text-5xl mb-3">📁</div>
         <p className="text-lg font-medium text-gray-700">{t('upload.dragDrop')}</p>
         <p className="text-sm text-gray-500 mt-1">{t('upload.dragDropSub')}</p>
-        <button className="mt-4 px-5 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors">
+        <span className="mt-4 inline-block px-5 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors">
           {t('upload.selectFiles')}
-        </button>
+        </span>
+        {/* Hidden input — label click triggers it natively on mobile */}
         <input
-          ref={inputRef}
+          id="file-upload-input"
           type="file"
           multiple
-          className="hidden"
-          onChange={e => addFiles(e.target.files)}
+          accept={ACCEPT_ATTR}
+          className="sr-only"
+          onChange={e => { addFiles(e.target.files); e.target.value = '' }}
         />
-      </div>
+      </label>
 
       {/* Staged files */}
       {files.length > 0 && (
@@ -118,7 +119,6 @@ export default function UploadZone({ onUploadsStarted }) {
             ))}
           </div>
 
-          {/* Category selection */}
           <CategorySelect value={category} onChange={setCategory} />
 
           {error && <p className="text-sm text-red-600">{error}</p>}

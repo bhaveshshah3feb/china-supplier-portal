@@ -24,9 +24,11 @@ export function getUploadPath(supplierId, fileType, filename) {
   return `${supplierId}/${folder}/${ts}_${rand}.${ext}`
 }
 
-export function getSalesUrl(path) {
+export function getSalesUrl(path, { download = false, filename = '' } = {}) {
   if (!path) return null
-  const { data } = supabase.storage.from('sales').getPublicUrl(path)
+  const { data } = supabase.storage.from('sales').getPublicUrl(path, {
+    download: download ? (filename || true) : false,
+  })
   return data.publicUrl
 }
 
