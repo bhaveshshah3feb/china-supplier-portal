@@ -24,7 +24,7 @@ function ShareModal({ file, onClose }) {
   const category = file.main_categories?.name_en || ''
 
   const typeWord = fileType === 'video' ? 'video' : fileType === 'image' ? 'image' : 'file'
-  const defaultCaption = `Here's the ${typeWord} for *${machineName}*${category ? ` — ${category}` : ''} from Aryan Amusements.`
+  const defaultCaption = `Here's the video for ${machineName} — ${category}`
 
   const [phone, setPhone]         = useState('')
   const [email, setEmail]         = useState('')
