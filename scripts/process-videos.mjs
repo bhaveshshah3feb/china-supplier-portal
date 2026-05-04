@@ -34,12 +34,14 @@ const BOLD_FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 
 // ── Watermark config ─────────────────────────────────────────
 const WM = {
-  name:    'Bhavesh - Aryan Amusements',
-  phone:   '+91 9841081945',
-  logoSize: 110,  // logo rendered at 110×110 px
-  rightW:   310,  // right-side box width (phone + name)
-  rightH:   105,  // right-side box height
-  srcH:     44,   // SRC code box height
+  name:     'Bhavesh - Aryan Amusements',
+  phone:    '+91 9841081945',
+  logoSize: 100,  // logo rendered at 100×100 px
+  logoPad:  5,    // padding around logo inside its box
+  textW:    330,  // width of text area beside the logo
+  totalH:   110,  // height of the combined top-left watermark band
+  srcH:     38,   // SRC code box height (bottom-right corner)
+  srcW:     220,  // SRC code box width (bottom-right corner)
 }
 
 // ── Auto-heal: queue uploads that never got a processing job ─
@@ -294,34 +296,37 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       const escapedPhone = WM.phone.replace(/'/g, "\\'").replace(/:/g, '\\:')
       const escapedCode  = supplierCode.replace(/'/g, "\\'").replace(/:/g, '\\:')
 
-      const logoBox = WM.logoSize + 10   // 120 — black bg box for logo
-      const rightW  = WM.rightW          // 310
-      const rightH  = WM.rightH          // 105
-      const srcH    = WM.srcH            // 44
+      // Derived dimensions
+      const logoBoxW = WM.logoSize + (2 * WM.logoPad)  // 110 — logo bg box width
+      const textW    = WM.textW                          // 330 — text area width
+      const totalH   = WM.totalH                         // 110 — unified band height
+      const srcH     = WM.srcH                           // 38
+      const srcW     = WM.srcW                           // 220
+      const textX    = logoBoxW + 10                     // 120 — text starts here (absolute)
 
-      // Video-stream filters (drawbox + drawtext only — no second input here)
+      // Video-stream filters: logo box + text box are flush (no gap), same height
       const videoFilters = [
-        // Top-left: black bg for logo (or company name if no logo)
-        `drawbox=x=0:y=0:w=${logoBox}:h=${logoBox}:color=black@0.75:t=fill`,
-        // Top-right: phone + name box
-        `drawbox=x=iw-${rightW}:y=0:w=${rightW}:h=${rightH}:color=black@0.75:t=fill`,
-        // Bottom-right: SRC code box
-        `drawbox=x=iw-${rightW}:y=ih-${srcH}:w=${rightW}:h=${srcH}:color=black@0.75:t=fill`,
-        // Phone number — large bold yellow
-        `drawtext=text='${escapedPhone}':x=W-${rightW-14}:y=14:fontsize=34:fontcolor=yellow@0.95:fontfile=${BOLD_FONT}:shadowx=2:shadowy=2`,
+        // Logo background box (top-left)
+        `drawbox=x=0:y=0:w=${logoBoxW}:h=${totalH}:color=black@0.75:t=fill`,
+        // Text area — flush against logo box, same height
+        `drawbox=x=${logoBoxW}:y=0:w=${textW}:h=${totalH}:color=black@0.75:t=fill`,
+        // SRC code box (bottom-right corner)
+        `drawbox=x=iw-${srcW}:y=ih-${srcH}:w=${srcW}:h=${srcH}:color=black@0.75:t=fill`,
+        // Phone number — bold yellow, absolute x so it can never overflow
+        `drawtext=text='${escapedPhone}':x=${textX}:y=12:fontsize=28:fontcolor=yellow@0.95:fontfile=${BOLD_FONT}:shadowx=1:shadowy=1`,
         // Contact name — bold white
-        `drawtext=text='${escapedName}':x=W-${rightW-14}:y=62:fontsize=22:fontcolor=white:fontfile=${BOLD_FONT}:shadowx=1:shadowy=1`,
-        // SRC code — small dimmed
-        `drawtext=text='SRC\\: ${escapedCode}':x=W-${rightW-14}:y=H-${srcH-14}:fontsize=15:fontcolor=white@0.65`,
-        // If no logo: show abbreviated company name in the top-left box
+        `drawtext=text='${escapedName}':x=${textX}:y=62:fontsize=20:fontcolor=white:fontfile=${BOLD_FONT}:shadowx=1:shadowy=1`,
+        // SRC code (bottom-right)
+        `drawtext=text='SRC\\: ${escapedCode}':x=W-${srcW - 10}:y=H-${srcH - 12}:fontsize=13:fontcolor=white@0.65`,
+        // Fallback if no logo: show name in the logo box area
         ...(hasLogo ? [] : [
-          `drawtext=text='Aryan Amusements':x=6:y=14:fontsize=18:fontcolor=white:fontfile=${BOLD_FONT}:shadowx=1:shadowy=1`,
+          `drawtext=text='Aryan':x=6:y=30:fontsize=18:fontcolor=white:fontfile=${BOLD_FONT}:shadowx=1:shadowy=1`,
         ]),
       ].join(',')
 
-      // Build filter_complex — overlay logo on top-left if available
+      // Build filter_complex — overlay logo inside its box if available
       const filterComplex = hasLogo
-        ? `[0:v]${videoFilters}[vid];[1:v]scale=${WM.logoSize}:${WM.logoSize}[logo];[vid][logo]overlay=5:5[out]`
+        ? `[0:v]${videoFilters}[vid];[1:v]scale=${WM.logoSize}:${WM.logoSize}[logo];[vid][logo]overlay=${WM.logoPad}:${WM.logoPad}[out]`
         : `[0:v]${videoFilters}[out]`
 
       // Different output format + FFmpeg flags for images vs videos
