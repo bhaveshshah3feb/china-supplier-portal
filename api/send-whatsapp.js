@@ -51,7 +51,7 @@ export default async function handler(req, res) {
     })
   }
 
-  const { to_phone, file_url, filename, file_type, caption } = req.body
+  const { to_phone, file_url, filename, file_type, machine_name, category } = req.body
   if (!to_phone || !file_url) {
     return res.status(400).json({ error: 'to_phone and file_url are required' })
   }
@@ -60,24 +60,37 @@ export default async function handler(req, res) {
   const cleanPhone = to_phone.replace(/[^\d]/g, '')
   if (cleanPhone.length < 7) return res.status(400).json({ error: 'Invalid phone number' })
 
-  const msgCaption = caption || `File from Aryana Amusements: ${filename || 'file'}`
+  // Header media parameter — type matches the file
+  const headerParam = file_type === 'video'
+    ? { type: 'video',    video:    { link: file_url } }
+    : file_type === 'image'
+      ? { type: 'image',  image:    { link: file_url } }
+      : { type: 'document', document: { link: file_url, filename: filename || 'file' } }
 
-  // Build media object based on file type
-  let mediaObj
-  if (file_type === 'video') {
-    mediaObj = { type: 'video', video: { link: file_url, caption: msgCaption } }
-  } else if (file_type === 'image') {
-    mediaObj = { type: 'image', image: { link: file_url, caption: msgCaption } }
-  } else {
-    // document, pricelist, other
-    mediaObj = { type: 'document', document: { link: file_url, filename: filename || 'file', caption: msgCaption } }
-  }
-
+  // Use approved template game_vidpic
+  // Body: "Here's the video for {{1}} — {{2}}"
   const payload = {
     messaging_product: 'whatsapp',
     recipient_type:    'individual',
     to:                cleanPhone,
-    ...mediaObj,
+    type:              'template',
+    template: {
+      name:     'game_vidpic',
+      language: { code: 'en' },
+      components: [
+        {
+          type:       'header',
+          parameters: [headerParam],
+        },
+        {
+          type:       'body',
+          parameters: [
+            { type: 'text', text: machine_name || filename || 'Product' },
+            { type: 'text', text: category     || 'Amusement Equipment' },
+          ],
+        },
+      ],
+    },
   }
 
   const waRes = await fetch(

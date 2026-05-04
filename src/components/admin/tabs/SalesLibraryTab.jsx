@@ -24,11 +24,11 @@ function ShareModal({ file, onClose }) {
   const category = file.main_categories?.name_en || ''
 
   const typeWord = fileType === 'video' ? 'video' : fileType === 'image' ? 'image' : 'file'
-  const defaultCaption = `Here's the video for ${machineName} — ${category}`
 
   const [phone, setPhone]         = useState('')
   const [email, setEmail]         = useState('')
-  const [caption, setCaption]     = useState(defaultCaption)
+  const [waName, setWaName]       = useState(machineName)
+  const [waCat, setWaCat]         = useState(category)
   const [waSending, setWaSending] = useState(false)
   const [waResult, setWaResult]   = useState(null)  // null | 'ok' | string(err)
   const [copied, setCopied]       = useState(false)
@@ -46,11 +46,12 @@ function ShareModal({ file, onClose }) {
           Authorization: `Bearer ${session?.access_token}`,
         },
         body: JSON.stringify({
-          to_phone:  phone,
-          file_url:  url,
-          filename:  filename,
-          file_type: fileType,
-          caption:   caption,
+          to_phone:     phone,
+          file_url:     url,
+          filename:     filename,
+          file_type:    fileType,
+          machine_name: waName,
+          category:     waCat,
         }),
       })
       const body = await res.json()
@@ -68,7 +69,7 @@ function ShareModal({ file, onClose }) {
 
   function openWaLink() {
     const cleanPhone = phone.replace(/[^\d]/g, '')
-    const msg = encodeURIComponent(caption)
+    const msg = encodeURIComponent(`Here's the video for ${waName} — ${waCat}`)
     window.open(`https://wa.me/${cleanPhone}?text=${msg}`, '_blank')
   }
 
@@ -122,15 +123,24 @@ function ShareModal({ file, onClose }) {
               type="tel"
               value={phone}
               onChange={e => setPhone(e.target.value)}
-              placeholder="Phone number with country code (e.g. 919876543210)"
+              placeholder="Phone with country code (e.g. 919876543210)"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none"
             />
-            <textarea
-              value={caption}
-              onChange={e => setCaption(e.target.value)}
-              rows={3}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none resize-none"
-            />
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Machine Name</label>
+                <input value={waName} onChange={e => setWaName(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Category</label>
+                <input value={waCat} onChange={e => setWaCat(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none" />
+              </div>
+            </div>
+            <p className="text-xs text-gray-400 bg-gray-50 px-3 py-2 rounded-lg italic">
+              "{`Here's the video for ${waName} — ${waCat}`}"
+            </p>
             <div className="flex gap-2">
               <button onClick={sendWhatsApp} disabled={waSending || !phone.trim()}
                 className="flex-1 bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors">
