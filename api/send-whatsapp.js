@@ -60,37 +60,54 @@ export default async function handler(req, res) {
   const cleanPhone = to_phone.replace(/[^\d]/g, '')
   if (cleanPhone.length < 7) return res.status(400).json({ error: 'Invalid phone number' })
 
-  // Header media parameter — type matches the file
-  const headerParam = file_type === 'video'
-    ? { type: 'video',    video:    { link: file_url } }
-    : file_type === 'image'
-      ? { type: 'image',  image:    { link: file_url } }
-      : { type: 'document', document: { link: file_url, filename: filename || 'file' } }
+  const name1 = machine_name || filename || 'Product'
+  const name2 = category     || 'Amusement Equipment'
 
-  // Use approved template game_vidpic
-  // Body: "Here's the video for {{1}} — {{2}}"
-  const payload = {
-    messaging_product: 'whatsapp',
-    recipient_type:    'individual',
-    to:                cleanPhone,
-    type:              'template',
-    template: {
-      name:     'game_vidpic',
-      language: { code: 'en' },
-      components: [
-        {
-          type:       'header',
-          parameters: [headerParam],
-        },
-        {
-          type:       'body',
-          parameters: [
-            { type: 'text', text: machine_name || filename || 'Product' },
-            { type: 'text', text: category     || 'Amusement Equipment' },
-          ],
-        },
-      ],
-    },
+  let payload
+
+  if (file_type === 'video') {
+    // Approved template: game_vidpic
+    // "Here's the video for {{1}} — {{2}}"
+    payload = {
+      messaging_product: 'whatsapp',
+      recipient_type:    'individual',
+      to:                cleanPhone,
+      type:              'template',
+      template: {
+        name:     'game_vidpic',
+        language: { code: 'en' },
+        components: [
+          { type: 'header', parameters: [{ type: 'video', video: { link: file_url } }] },
+          { type: 'body',   parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
+        ],
+      },
+    }
+  } else if (file_type === 'image') {
+    // Approved template: game_pic
+    // "Here's the image for {{1}} - {{2}}. Let us know if you need more info."
+    payload = {
+      messaging_product: 'whatsapp',
+      recipient_type:    'individual',
+      to:                cleanPhone,
+      type:              'template',
+      template: {
+        name:     'game_pic',
+        language: { code: 'en' },
+        components: [
+          { type: 'header', parameters: [{ type: 'image', image: { link: file_url } }] },
+          { type: 'body',   parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
+        ],
+      },
+    }
+  } else {
+    // Documents / pricelists — send as plain document (no template required for utility messages)
+    payload = {
+      messaging_product: 'whatsapp',
+      recipient_type:    'individual',
+      to:                cleanPhone,
+      type:              'document',
+      document: { link: file_url, filename: filename || 'file', caption: `${name1} — ${name2}` },
+    }
   }
 
   const waRes = await fetch(
