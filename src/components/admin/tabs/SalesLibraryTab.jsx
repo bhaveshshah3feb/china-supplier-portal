@@ -17,9 +17,18 @@ function ShareModal({ file, onClose }) {
   const fileType  = file.file_type
   const sizeMB    = (file.file_size || 0) / 1024 / 1024
 
+  // Machine name: prefer AI game name → display name → filename without extension
+  const machineName = file.ai_game_name
+    || file.display_name
+    || file.original_filename.replace(/\.[^.]+$/, '')
+  const category = file.main_categories?.name_en || ''
+
+  const typeWord = fileType === 'video' ? 'video' : fileType === 'image' ? 'image' : 'file'
+  const defaultCaption = `Here's the ${typeWord} for *${machineName}*${category ? ` — ${category}` : ''} from Aryan Amusements.`
+
   const [phone, setPhone]         = useState('')
   const [email, setEmail]         = useState('')
-  const [caption, setCaption]     = useState(`Check out this amusement equipment from Aryana Amusements:\n\n${url}`)
+  const [caption, setCaption]     = useState(defaultCaption)
   const [waSending, setWaSending] = useState(false)
   const [waResult, setWaResult]   = useState(null)  // null | 'ok' | string(err)
   const [copied, setCopied]       = useState(false)
@@ -59,16 +68,16 @@ function ShareModal({ file, onClose }) {
 
   function openWaLink() {
     const cleanPhone = phone.replace(/[^\d]/g, '')
-    const msg = encodeURIComponent(`${caption}\n\n${url}`)
+    const msg = encodeURIComponent(caption)
     window.open(`https://wa.me/${cleanPhone}?text=${msg}`, '_blank')
   }
 
   function openMailto() {
     const subject = encodeURIComponent(`Amusement Equipment: ${filename}`)
     const body = encodeURIComponent(
-      `Hi,\n\nPlease find the requested file below:\n\n${url}\n\n` +
+      `Hi,\n\nPlease find the ${typeWord} for ${machineName}${category ? ` (${category})` : ''} below:\n\n${url}\n\n` +
       (sizeMB < 20 ? 'You can download it directly from the link above.\n\n' : '') +
-      `File: ${filename}\nSize: ${fmtBytes(file.file_size)}\n\nBest regards,\nBhavesh — Aryana Amusements\n+91 9841081945`
+      `File: ${filename}\nSize: ${fmtBytes(file.file_size)}\n\nBest regards,\nBhavesh — Aryan Amusements\n+91 9841081945`
     )
     window.open(`mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`)
   }
@@ -139,8 +148,8 @@ function ShareModal({ file, onClose }) {
               <p className="text-xs text-red-600 bg-red-50 px-3 py-2 rounded-lg">✗ {waResult}</p>
             )}
             <p className="text-[10px] text-gray-400">
-              "Send via API" uses your configured WhatsApp Business API and sends the file directly.<br />
-              "Open WhatsApp" opens the app/web with the message pre-filled (no API needed).
+              <strong>Send via API</strong> sends the file as an attachment directly to the number above.<br />
+              <strong>Open WhatsApp</strong> opens WhatsApp with the caption pre-filled (text only — attach the file manually).
             </p>
           </div>
 
@@ -200,7 +209,7 @@ export default function SalesLibraryTab() {
     let q = supabase
       .from('uploads')
       .select(`
-        id, original_filename, display_name, file_type, file_size, mime_type,
+        id, original_filename, display_name, ai_game_name, file_type, file_size, mime_type,
         sales_path, processing_status, created_at, updated_at, ai_confidence,
         suppliers(id, company_name_en, company_name_zh, supplier_code),
         main_categories!main_category_id(id, name_en, name_zh),
