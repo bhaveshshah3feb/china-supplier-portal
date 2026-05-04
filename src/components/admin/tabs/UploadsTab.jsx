@@ -1,6 +1,52 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { supabase, getUploadSignedUrl } from '../../../lib/supabase'
+
+// ── Hover-to-play thumbnail (uploads bucket — needs signed URL) ──
+function UploadThumb({ upload }) {
+  const [hovered, setHovered]     = useState(false)
+  const [signedUrl, setSignedUrl] = useState(null)
+  const videoRef = useRef()
+  const isVid = upload.file_type === 'video'
+  const isImg = upload.file_type === 'image'
+
+  async function handleMouseEnter() {
+    setHovered(true)
+    if ((isVid || isImg) && !signedUrl && upload.storage_path) {
+      try { setSignedUrl(await getUploadSignedUrl(upload.storage_path)) } catch {}
+    }
+  }
+  function handleMouseLeave() {
+    setHovered(false)
+    if (videoRef.current) { videoRef.current.pause(); videoRef.current.currentTime = 0 }
+  }
+  useEffect(() => {
+    if (hovered && signedUrl && videoRef.current) videoRef.current.play().catch(() => {})
+  }, [hovered, signedUrl])
+
+  return (
+    <div className="w-20 h-14 bg-gray-100 rounded-lg overflow-hidden relative cursor-default shrink-0"
+      onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+      {isImg && signedUrl ? (
+        <img src={signedUrl} alt="" className="w-full h-full object-cover" />
+      ) : isVid && signedUrl ? (
+        <>
+          <video ref={videoRef} src={signedUrl} muted loop playsInline preload="none"
+            className="w-full h-full object-cover" />
+          {!hovered && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+              <span className="text-lg">▶</span>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="w-full h-full flex items-center justify-center text-xl">
+          {upload.file_type === 'video' ? '🎬' : upload.file_type === 'image' ? '🖼️' : '📄'}
+        </div>
+      )}
+    </div>
+  )
+}
 
 const PROC_BADGE = {
   pending:    'bg-gray-100 text-gray-600',
@@ -136,7 +182,7 @@ export default function UploadsTab() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  {['File','Supplier','Type','Category','Size','Status','Date',''].map(h => (
+                  {['','File','Supplier','Type','Category','Size','Status','Date',''].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
                   ))}
                 </tr>
@@ -144,6 +190,9 @@ export default function UploadsTab() {
               <tbody className="divide-y divide-gray-50">
                 {uploads.map(u => (
                   <tr key={u.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-3 py-2">
+                      <UploadThumb upload={u} />
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <span>{typeIcon(u.file_type)}</span>

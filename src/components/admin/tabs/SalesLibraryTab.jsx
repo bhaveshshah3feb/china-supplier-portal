@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase, getSalesUrl } from '../../../lib/supabase'
 
 function fmtBytes(b) {
@@ -9,6 +9,55 @@ function fmtBytes(b) {
 }
 
 const TYPE_ICON = { video: '🎬', image: '🖼️', pricelist: '📊', document: '📄', other: '📁' }
+
+// ── Hover-to-play thumbnail (sales bucket — public URLs) ──────
+function SalesThumb({ file, onClick }) {
+  const [hovered, setHovered] = useState(false)
+  const videoRef = useRef()
+  const url   = getSalesUrl(file.sales_path)
+  const isVid = file.file_type === 'video'
+  const isImg = file.file_type === 'image'
+
+  function handleMouseLeave() {
+    setHovered(false)
+    if (videoRef.current) { videoRef.current.pause(); videoRef.current.currentTime = 0 }
+  }
+
+  useEffect(() => {
+    if (hovered && videoRef.current) videoRef.current.play().catch(() => {})
+  }, [hovered])
+
+  return (
+    <div className="aspect-video bg-gray-100 relative overflow-hidden cursor-pointer"
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={handleMouseLeave}
+    >
+      {isImg ? (
+        <img src={url} alt="" className="w-full h-full object-cover"
+          onError={e => { e.target.style.display = 'none' }} />
+      ) : isVid ? (
+        <>
+          <video ref={videoRef} src={url} muted loop playsInline preload="none"
+            className="w-full h-full object-cover" />
+          {!hovered && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/20">
+              <span className="text-3xl">▶</span>
+              <span className="text-[10px] text-white bg-black/50 px-2 py-0.5 rounded mt-1">Hover to play</span>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="w-full h-full flex items-center justify-center">
+          <span className="text-4xl">{TYPE_ICON[file.file_type] || '📁'}</span>
+        </div>
+      )}
+      <div className="absolute top-1.5 left-1.5 bg-black/60 text-white text-[10px] font-mono px-1.5 py-0.5 rounded">
+        {file.suppliers?.supplier_code}
+      </div>
+    </div>
+  )
+}
 
 // ── Share Modal ───────────────────────────────────────────────
 function ShareModal({ file, onClose }) {
@@ -327,22 +376,7 @@ export default function SalesLibraryTab() {
             const isVid = file.file_type === 'video'
             return (
               <div key={file.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
-                {/* Thumbnail */}
-                <div className="aspect-video bg-gray-100 relative overflow-hidden cursor-pointer"
-                  onClick={() => setPreview(file)}>
-                  {isImg ? (
-                    <img src={url} alt={file.original_filename} className="w-full h-full object-cover"
-                      onError={e => { e.target.style.display = 'none' }} />
-                  ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center gap-1">
-                      <span className="text-4xl">{TYPE_ICON[file.file_type] || '📁'}</span>
-                      {isVid && <span className="text-xs bg-black/50 text-white px-2 py-0.5 rounded-full">▶ Preview</span>}
-                    </div>
-                  )}
-                  <div className="absolute top-1.5 left-1.5 bg-black/60 text-white text-[10px] font-mono px-1.5 py-0.5 rounded">
-                    {file.suppliers?.supplier_code}
-                  </div>
-                </div>
+                <SalesThumb file={file} onClick={() => setPreview(file)} />
                 {/* Info */}
                 <div className="p-2.5 space-y-1">
                   <p className="text-xs font-medium text-gray-800 truncate">{file.display_name || file.original_filename}</p>
@@ -350,6 +384,7 @@ export default function SalesLibraryTab() {
                     {file.main_categories?.name_en}{file.sub_categories && <> › {file.sub_categories.name_en}</>}
                   </p>
                   <p className="text-[10px] text-gray-400">{file.suppliers?.company_name_en} · {fmtBytes(file.file_size)}</p>
+                  <p className="text-[10px] text-gray-300">Added {new Date(file.created_at).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}</p>
                   <div className="flex gap-1 pt-1">
                     <button onClick={() => setSharing(file)}
                       className="flex-1 text-center text-[10px] bg-green-50 text-green-700 hover:bg-green-100 px-1.5 py-1 rounded transition-colors font-medium">
@@ -380,7 +415,7 @@ export default function SalesLibraryTab() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  {['', 'File', 'Supplier', 'Category', 'Size', 'Date', 'Actions'].map(h => (
+                  {['', 'File', 'Supplier', 'Category', 'Size', 'Added', 'Actions'].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
                   ))}
                 </tr>
@@ -390,7 +425,11 @@ export default function SalesLibraryTab() {
                   const url = getSalesUrl(file.sales_path)
                   return (
                     <tr key={file.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3 text-xl">{TYPE_ICON[file.file_type] || '📁'}</td>
+                      <td className="px-3 py-2 w-24">
+                        <div className="w-20 h-14 rounded overflow-hidden">
+                          <SalesThumb file={file} onClick={() => setPreview(file)} />
+                        </div>
+                      </td>
                       <td className="px-4 py-3 max-w-48">
                         <p className="font-medium text-gray-800 truncate">{file.display_name || file.original_filename}</p>
                         <p className="text-xs text-gray-400 font-mono">{file.suppliers?.supplier_code}</p>
@@ -402,7 +441,7 @@ export default function SalesLibraryTab() {
                       </td>
                       <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{fmtBytes(file.file_size)}</td>
                       <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">
-                        {new Date(file.updated_at).toLocaleDateString()}
+                        {new Date(file.created_at).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-1 flex-wrap">
