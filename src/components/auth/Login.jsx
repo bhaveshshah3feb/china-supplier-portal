@@ -86,11 +86,10 @@ export default function Login() {
     if (reg.password.length < 8)              { setRegError(t('auth.passwordMin')); return }
     if (reg.password !== reg.confirmPassword) { setRegError(t('auth.passwordMatch')); return }
     setRegLoading(true)
-    const { error: signUpErr } = await supabase.auth.signUp({
+    const { data, error: signUpErr } = await supabase.auth.signUp({
       email: reg.email,
       password: reg.password,
       options: {
-        emailRedirectTo: `${window.location.origin}/verify`,
         data: {
           role:              'supplier',
           company_name_en:   reg.company_name_en,
@@ -103,7 +102,13 @@ export default function Login() {
     })
     setRegLoading(false)
     if (signUpErr) { setRegError(signUpErr.message); return }
-    navigate('/verify')
+    // Email confirmation disabled → session is returned immediately
+    if (data.session) {
+      navigate('/dashboard')
+    } else {
+      // Fallback if confirmation is still on in Supabase settings
+      navigate('/verify')
+    }
   }
 
   const inp   = 'w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none'
@@ -315,8 +320,8 @@ export default function Login() {
 
                 <p className="text-center text-xs text-gray-400">
                   {isZh
-                    ? '注册后请验证邮箱即可登录，无需等待审批。'
-                    : 'Verify your email after signup to access the portal immediately.'}
+                    ? '注册成功后即可直接登录，无需验证邮箱。'
+                    : 'You will be logged in instantly — no email verification needed.'}
                 </p>
               </form>
             </div>

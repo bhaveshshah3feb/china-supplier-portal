@@ -62,11 +62,10 @@ export default function Register() {
     if (form.password !== form.confirmPassword) { setError(t('auth.passwordMatch')); return }
 
     setLoading(true)
-    const { error: signUpErr } = await supabase.auth.signUp({
+    const { data, error: signUpErr } = await supabase.auth.signUp({
       email: form.email,
       password: form.password,
       options: {
-        emailRedirectTo: `${window.location.origin}/verify`,
         data: {
           role:              'supplier',
           company_name_en:   form.company_name_en,
@@ -81,7 +80,6 @@ export default function Register() {
 
     if (signUpErr) { setError(signUpErr.message); setLoading(false); return }
 
-    // Mark invite as accepted (best effort — may fail if user needs to verify email first)
     if (inviteToken) {
       await supabase
         .from('supplier_invitations')
@@ -90,7 +88,12 @@ export default function Register() {
         .eq('email', form.email)
     }
 
-    navigate('/verify')
+    // Email confirmation disabled → session returned immediately
+    if (data.session) {
+      navigate('/dashboard')
+    } else {
+      navigate('/verify')
+    }
   }
 
   const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none'
