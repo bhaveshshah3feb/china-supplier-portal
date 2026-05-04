@@ -14,7 +14,11 @@ import { execSync, exec } from 'child_process'
 import { promisify }      from 'util'
 import { writeFileSync, readFileSync, unlinkSync, mkdirSync, existsSync } from 'fs'
 import { tmpdir }         from 'os'
-import { join, extname }  from 'path'
+import { join, extname, dirname }  from 'path'
+import { fileURLToPath }  from 'url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname  = dirname(__filename)
 
 const execAsync = promisify(exec)
 
@@ -22,15 +26,20 @@ const execAsync = promisify(exec)
 const supabase  = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY)
 const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY })
 
-const TMP = join(tmpdir(), 'portal-proc')
+const TMP      = join(tmpdir(), 'portal-proc')
 if (!existsSync(TMP)) mkdirSync(TMP, { recursive: true })
+
+const LOGO_PATH = join(__dirname, 'assets', 'aryan-logo.jpg')
+const BOLD_FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 
 // ── Watermark config ─────────────────────────────────────────
 const WM = {
   name:    'Bhavesh - Aryan Amusements',
   phone:   '+91 9841081945',
-  cornerW: 260,
-  cornerH: 80,
+  logoSize: 110,  // logo rendered at 110×110 px
+  rightW:   310,  // right-side box width (phone + name)
+  rightH:   105,  // right-side box height
+  srcH:     44,   // SRC code box height
 }
 
 // ── Auto-heal: queue uploads that never got a processing job ─
@@ -277,50 +286,68 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
 
       console.log(`  Applying watermarks (SRC: ${supplierCode}, type: ${isImage ? 'image' : 'video'})...`)
 
-      const cW = WM.cornerW, cH = WM.cornerH
+      const hasLogo = existsSync(LOGO_PATH)
+      console.log(`  Logo file: ${hasLogo ? 'found' : 'NOT FOUND — text-only fallback'}`)
 
       // Escape text values for FFmpeg drawtext filter
-      const escapedName = WM.name.replace(/'/g, "\\'")
-      const escapedPhone = WM.phone.replace(/'/g, "\\'")
-      const escapedCode = supplierCode.replace(/'/g, "\\'")
+      const escapedName  = WM.name.replace(/'/g, "\\'").replace(/:/g, '\\:')
+      const escapedPhone = WM.phone.replace(/'/g, "\\'").replace(/:/g, '\\:')
+      const escapedCode  = supplierCode.replace(/'/g, "\\'").replace(/:/g, '\\:')
 
-      const vf = [
-        // Top-left box: company name
-        `drawbox=x=0:y=0:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
-        // Top-right box: phone number
-        `drawbox=x=iw-${cW}:y=0:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
-        // Bottom-right box: SRC code
-        `drawbox=x=iw-${cW}:y=ih-${cH}:w=${cW}:h=${cH}:color=black@0.75:t=fill`,
-        // Text overlays
-        `drawtext=text='${escapedName}':x=10:y=10:fontsize=22:fontcolor=white:shadowx=2:shadowy=2`,
-        `drawtext=text='${escapedPhone}':x=W-${cW-10}:y=10:fontsize=20:fontcolor=yellow@0.95:shadowx=2:shadowy=2`,
-        `drawtext=text='SRC\\: ${escapedCode}':x=W-${cW-10}:y=H-24:fontsize=13:fontcolor=white@0.55`,
+      const logoBox = WM.logoSize + 10   // 120 — black bg box for logo
+      const rightW  = WM.rightW          // 310
+      const rightH  = WM.rightH          // 105
+      const srcH    = WM.srcH            // 44
+
+      // Video-stream filters (drawbox + drawtext only — no second input here)
+      const videoFilters = [
+        // Top-left: black bg for logo (or company name if no logo)
+        `drawbox=x=0:y=0:w=${logoBox}:h=${logoBox}:color=black@0.75:t=fill`,
+        // Top-right: phone + name box
+        `drawbox=x=iw-${rightW}:y=0:w=${rightW}:h=${rightH}:color=black@0.75:t=fill`,
+        // Bottom-right: SRC code box
+        `drawbox=x=iw-${rightW}:y=ih-${srcH}:w=${rightW}:h=${srcH}:color=black@0.75:t=fill`,
+        // Phone number — large bold yellow
+        `drawtext=text='${escapedPhone}':x=W-${rightW-14}:y=14:fontsize=34:fontcolor=yellow@0.95:fontfile=${BOLD_FONT}:shadowx=2:shadowy=2`,
+        // Contact name — bold white
+        `drawtext=text='${escapedName}':x=W-${rightW-14}:y=62:fontsize=22:fontcolor=white:fontfile=${BOLD_FONT}:shadowx=1:shadowy=1`,
+        // SRC code — small dimmed
+        `drawtext=text='SRC\\: ${escapedCode}':x=W-${rightW-14}:y=H-${srcH-14}:fontsize=15:fontcolor=white@0.65`,
+        // If no logo: show abbreviated company name in the top-left box
+        ...(hasLogo ? [] : [
+          `drawtext=text='Aryan Amusements':x=6:y=14:fontsize=18:fontcolor=white:fontfile=${BOLD_FONT}:shadowx=1:shadowy=1`,
+        ]),
       ].join(',')
+
+      // Build filter_complex — overlay logo on top-left if available
+      const filterComplex = hasLogo
+        ? `[0:v]${videoFilters}[vid];[1:v]scale=${WM.logoSize}:${WM.logoSize}[logo];[vid][logo]overlay=5:5[out]`
+        : `[0:v]${videoFilters}[out]`
 
       // Different output format + FFmpeg flags for images vs videos
       const salesExt  = isImage ? (origExt || '.jpg') : '.mp4'
       const tmpOutput = join(TMP, `output_${jobId}${salesExt}`)
 
+      const logoInput = hasLogo ? `-i "${LOGO_PATH}"` : ''
+
       try {
         if (isImage) {
-          // Single frame — no video codec, no audio stream
           console.log('  Running FFmpeg for image watermark...')
           await execAsync(
-            `ffmpeg -i "${tmpInput}" -vf "${vf}" -frames:v 1 "${tmpOutput}" -y`,
+            `ffmpeg -i "${tmpInput}" ${logoInput} -filter_complex "${filterComplex}" -map "[out]" -frames:v 1 "${tmpOutput}" -y`,
             { maxBuffer: 1024 * 1024 * 100 }
           )
         } else {
-          // Video — re-encode H.264
           console.log('  Running FFmpeg for video watermark...')
           await execAsync(
-            `ffmpeg -i "${tmpInput}" -vf "${vf}" -c:v libx264 -crf 23 -preset fast -c:a copy "${tmpOutput}" -y`,
+            `ffmpeg -i "${tmpInput}" ${logoInput} -filter_complex "${filterComplex}" -map "[out]" -map 0:a? -c:v libx264 -crf 23 -preset fast "${tmpOutput}" -y`,
             { maxBuffer: 1024 * 1024 * 100 }
           )
         }
         console.log('  Watermark applied')
       } catch (ffErr) {
         console.error('  FFmpeg error:', ffErr.message)
-        console.error('  Filter string:', vf)
+        console.error('  filter_complex:', filterComplex)
         throw new Error(`FFmpeg failed: ${ffErr.message}`)
       }
 
