@@ -12,25 +12,44 @@ const TYPE_ICON = { video: '🎬', image: '🖼️', pricelist: '📊', document
 
 // ── Hover-to-play thumbnail (sales bucket — public URLs) ──────
 function SalesThumb({ file, onClick }) {
-  const [hovered, setHovered] = useState(false)
-  const videoRef = useRef()
+  const [hovered, setHovered]   = useState(false)
+  const [inView, setInView]     = useState(false)
+  const videoRef     = useRef()
+  const containerRef = useRef()
   const url   = getSalesUrl(file.sales_path)
   const isVid = file.file_type === 'video'
   const isImg = file.file_type === 'image'
 
-  function handleMouseLeave() {
-    setHovered(false)
-    if (videoRef.current) { videoRef.current.pause(); videoRef.current.currentTime = 0 }
+  // Load metadata (shows first frame) when card scrolls into view
+  useEffect(() => {
+    if (!isVid) return
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) { setInView(true); observer.disconnect() } },
+      { rootMargin: '300px', threshold: 0 }
+    )
+    if (containerRef.current) observer.observe(containerRef.current)
+    return () => observer.disconnect()
+  }, [isVid])
+
+  // Seek to 1 s once metadata is ready — gives a better thumbnail than frame 0
+  function onLoadedMetadata() {
+    if (videoRef.current && !hovered) videoRef.current.currentTime = 1
   }
 
-  useEffect(() => {
-    if (hovered && videoRef.current) videoRef.current.play().catch(() => {})
-  }, [hovered])
+  function handleMouseEnter() {
+    setHovered(true)
+    if (videoRef.current) { videoRef.current.currentTime = 0; videoRef.current.play().catch(() => {}) }
+  }
+  function handleMouseLeave() {
+    setHovered(false)
+    if (videoRef.current) { videoRef.current.pause(); videoRef.current.currentTime = 1 }
+  }
 
   return (
-    <div className="aspect-video bg-gray-100 relative overflow-hidden cursor-pointer"
+    <div ref={containerRef}
+      className="aspect-video bg-gray-100 relative overflow-hidden cursor-pointer"
       onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
+      onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
       {isImg ? (
@@ -38,12 +57,16 @@ function SalesThumb({ file, onClick }) {
           onError={e => { e.target.style.display = 'none' }} />
       ) : isVid ? (
         <>
-          <video ref={videoRef} src={url} muted loop playsInline preload="none"
-            className="w-full h-full object-cover" />
+          {inView && (
+            <video ref={videoRef} src={url} muted loop playsInline preload="metadata"
+              onLoadedMetadata={onLoadedMetadata}
+              className="w-full h-full object-cover" />
+          )}
           {!hovered && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/20">
-              <span className="text-3xl">▶</span>
-              <span className="text-[10px] text-white bg-black/50 px-2 py-0.5 rounded mt-1">Hover to play</span>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="bg-black/40 rounded-full w-10 h-10 flex items-center justify-center">
+                <span className="text-white text-lg pl-0.5">▶</span>
+              </div>
             </div>
           )}
         </>

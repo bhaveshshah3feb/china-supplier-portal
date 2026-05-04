@@ -6,36 +6,56 @@ import { supabase, getUploadSignedUrl } from '../../../lib/supabase'
 function UploadThumb({ upload }) {
   const [hovered, setHovered]     = useState(false)
   const [signedUrl, setSignedUrl] = useState(null)
-  const videoRef = useRef()
+  const videoRef     = useRef()
+  const containerRef = useRef()
   const isVid = upload.file_type === 'video'
   const isImg = upload.file_type === 'image'
 
-  async function handleMouseEnter() {
+  // Fetch signed URL when row scrolls into view
+  useEffect(() => {
+    if (!isVid && !isImg) return
+    let done = false
+    const observer = new IntersectionObserver(
+      async ([entry]) => {
+        if (entry.isIntersecting && !done && upload.storage_path) {
+          done = true
+          observer.disconnect()
+          try { setSignedUrl(await getUploadSignedUrl(upload.storage_path)) } catch {}
+        }
+      },
+      { rootMargin: '300px', threshold: 0 }
+    )
+    if (containerRef.current) observer.observe(containerRef.current)
+    return () => observer.disconnect()
+  }, [isVid, isImg, upload.storage_path])
+
+  function onLoadedMetadata() {
+    if (videoRef.current && !hovered) videoRef.current.currentTime = 1
+  }
+  function handleMouseEnter() {
     setHovered(true)
-    if ((isVid || isImg) && !signedUrl && upload.storage_path) {
-      try { setSignedUrl(await getUploadSignedUrl(upload.storage_path)) } catch {}
-    }
+    if (videoRef.current) { videoRef.current.currentTime = 0; videoRef.current.play().catch(() => {}) }
   }
   function handleMouseLeave() {
     setHovered(false)
-    if (videoRef.current) { videoRef.current.pause(); videoRef.current.currentTime = 0 }
+    if (videoRef.current) { videoRef.current.pause(); videoRef.current.currentTime = 1 }
   }
-  useEffect(() => {
-    if (hovered && signedUrl && videoRef.current) videoRef.current.play().catch(() => {})
-  }, [hovered, signedUrl])
 
   return (
-    <div className="w-20 h-14 bg-gray-100 rounded-lg overflow-hidden relative cursor-default shrink-0"
+    <div ref={containerRef}
+      className="w-20 h-14 bg-gray-100 rounded-lg overflow-hidden relative cursor-default shrink-0"
       onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
       {isImg && signedUrl ? (
         <img src={signedUrl} alt="" className="w-full h-full object-cover" />
       ) : isVid && signedUrl ? (
         <>
-          <video ref={videoRef} src={signedUrl} muted loop playsInline preload="none"
-            className="w-full h-full object-cover" />
+          <video ref={videoRef} src={signedUrl} muted loop playsInline preload="metadata"
+            onLoadedMetadata={onLoadedMetadata} className="w-full h-full object-cover" />
           {!hovered && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-              <span className="text-lg">▶</span>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="bg-black/40 rounded-full w-7 h-7 flex items-center justify-center">
+                <span className="text-white text-sm pl-0.5">▶</span>
+              </div>
             </div>
           )}
         </>
