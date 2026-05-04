@@ -56,6 +56,18 @@ const WA_KEYS = [
   },
 ]
 
+const GITHUB_KEYS = [
+  {
+    key:         'github_pat',
+    label:       'GitHub Personal Access Token',
+    placeholder: 'github_pat_xxxx...',
+    help:        'GitHub → Settings → Developer Settings → Personal Access Tokens → Fine-grained → Actions (read & write)',
+    type:        'password',
+  },
+]
+
+const ALL_KEYS = [...NOTIFICATION_KEYS, ...WA_KEYS, ...GITHUB_KEYS]
+
 export default function SettingsTab() {
   const [settings, setSettings] = useState({})
   const [saving, setSaving]     = useState(false)
@@ -63,7 +75,7 @@ export default function SettingsTab() {
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState(null)
   const [showToken, setShowToken] = useState(false)
-  const [testState, setTestState] = useState('idle') // idle | testing | ok | err
+  const [testState, setTestState] = useState('idle')
   const [testMsg, setTestMsg]   = useState('')
 
   useEffect(() => { load() }, [])
@@ -80,7 +92,7 @@ export default function SettingsTab() {
     setSaving(true)
     setError(null)
     try {
-      const upserts = WA_KEYS.map(({ key }) => ({ key, value: settings[key] || '' }))
+      const upserts = ALL_KEYS.map(({ key }) => ({ key, value: settings[key] || '' }))
       const { error: err } = await supabase.from('settings').upsert(upserts, { onConflict: 'key' })
       if (err) throw new Error(err.message)
       setSaved(true)
@@ -120,6 +132,13 @@ export default function SettingsTab() {
     setTimeout(() => setTestState('idle'), 5000)
   }
 
+  const saveBtn = (
+    <button onClick={save} disabled={saving}
+      className="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
+      {saving ? 'Saving…' : saved ? '✓ Saved!' : 'Save Settings'}
+    </button>
+  )
+
   if (loading) return <div className="py-12 text-center text-gray-400">Loading settings…</div>
 
   return (
@@ -150,12 +169,7 @@ export default function SettingsTab() {
           ))}
           {error && <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
           <div className="flex items-center gap-3 pt-2">
-            <button onClick={save} disabled={saving}
-              className="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
-              {saving ? 'Saving…' : saved ? '✓ Saved!' : 'Save Settings'}
-            </button>
-            <a href="https://resend.com/signup" target="_blank" rel="noreferrer"
-              className="text-xs text-blue-600 hover:underline">Get Resend API key (free) →</a>
+            {saveBtn}
           </div>
         </div>
       </div>
@@ -199,10 +213,7 @@ export default function SettingsTab() {
           {error && <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
 
           <div className="flex items-center gap-3 pt-2 flex-wrap">
-            <button onClick={save} disabled={saving}
-              className="bg-green-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors">
-              {saving ? 'Saving…' : saved ? '✓ Saved!' : 'Save Settings'}
-            </button>
+            {saveBtn}
             <button onClick={testConnection} disabled={testState === 'testing'}
               className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg text-sm hover:bg-gray-200 transition-colors disabled:opacity-50">
               {testState === 'testing' ? 'Testing…' : 'Test Connection'}
@@ -216,7 +227,54 @@ export default function SettingsTab() {
         </div>
       </div>
 
-      {/* Setup guide */}
+      {/* Automation */}
+      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center gap-3">
+          <span className="text-2xl">⚙️</span>
+          <div>
+            <h2 className="font-semibold text-gray-800">Automation</h2>
+            <p className="text-xs text-gray-400">Allows the portal to trigger video processing from the Uploads tab</p>
+          </div>
+        </div>
+        <div className="p-6 space-y-5">
+          {GITHUB_KEYS.map(({ key, label, placeholder, help, type }) => (
+            <div key={key}>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+              <div className="relative">
+                <input
+                  type={showToken ? 'text' : 'password'}
+                  value={settings[key] || ''}
+                  onChange={e => setSettings(s => ({ ...s, [key]: e.target.value }))}
+                  placeholder={placeholder}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono pr-16"
+                />
+                <button type="button" onClick={() => setShowToken(v => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600">
+                  {showToken ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mt-1">{help}</p>
+            </div>
+          ))}
+
+          <div className="bg-blue-50 rounded-xl p-4 text-xs text-blue-800 space-y-1">
+            <p className="font-semibold">How to create a GitHub token:</p>
+            <ol className="list-decimal list-inside space-y-1 text-blue-700">
+              <li>Go to <strong>github.com</strong> → your profile → Settings</li>
+              <li>Developer settings → Personal access tokens → <strong>Fine-grained tokens</strong></li>
+              <li>Click <strong>Generate new token</strong></li>
+              <li>Set Repository access → Only select: <strong>china-supplier-portal</strong></li>
+              <li>Permissions → Repository → <strong>Actions → Read and write</strong></li>
+              <li>Generate and paste the token above</li>
+            </ol>
+          </div>
+
+          {error && <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
+          <div className="pt-2">{saveBtn}</div>
+        </div>
+      </div>
+
+      {/* WhatsApp setup guide */}
       <div className="bg-amber-50 rounded-2xl border border-amber-100 p-6">
         <h3 className="font-semibold text-amber-800 text-sm mb-3">How to get WhatsApp API credentials</h3>
         <ol className="text-xs text-amber-700 space-y-2 list-decimal list-inside leading-relaxed">

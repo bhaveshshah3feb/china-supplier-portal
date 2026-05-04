@@ -19,9 +19,11 @@ function fmtBytes(b) {
 
 export default function UploadsTab() {
   const { t } = useTranslation()
-  const [uploads, setUploads] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [filter, setFilter]   = useState({ type: 'all', status: 'all' })
+  const [uploads, setUploads]         = useState([])
+  const [loading, setLoading]         = useState(true)
+  const [filter, setFilter]           = useState({ type: 'all', status: 'all' })
+  const [triggering, setTriggering]   = useState(false)
+  const [triggerMsg, setTriggerMsg]   = useState(null) // { type: 'ok'|'err', text }
 
   useEffect(() => { load() }, [filter])
 
@@ -55,6 +57,29 @@ export default function UploadsTab() {
     }
   }
 
+  async function triggerProcessing() {
+    setTriggering(true)
+    setTriggerMsg(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/trigger-processing', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session?.access_token}` },
+      })
+      const body = await res.json()
+      if (body.ok) {
+        setTriggerMsg({ type: 'ok', text: 'Workflow triggered! Processing starts in ~30 seconds.' })
+      } else {
+        setTriggerMsg({ type: 'err', text: body.error || 'Failed to trigger' })
+      }
+    } catch {
+      setTriggerMsg({ type: 'err', text: 'Could not reach server' })
+    } finally {
+      setTriggering(false)
+      setTimeout(() => setTriggerMsg(null), 8000)
+    }
+  }
+
   async function deleteUpload(upload) {
     if (!window.confirm(t('admin.confirmDelete'))) return
     await supabase.storage.from('uploads').remove([upload.storage_path])
@@ -65,9 +90,11 @@ export default function UploadsTab() {
 
   const typeIcon = t => t === 'video' ? '🎬' : t === 'image' ? '🖼️' : '📄'
 
+  const pendingCount = uploads.filter(u => ['pending','processing'].includes(u.processing_status)).length
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap gap-3 items-center">
         <select value={filter.type} onChange={e => setFilter(f => ({ ...f, type: e.target.value }))}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-500 outline-none"
         >
@@ -82,6 +109,21 @@ export default function UploadsTab() {
             <option key={v} value={v}>{v === 'all' ? 'All Statuses' : v}</option>
           ))}
         </select>
+        <button onClick={load}
+          className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50 transition-colors">
+          ↻ Refresh
+        </button>
+        <div className="ml-auto flex items-center gap-3 flex-wrap">
+          <button onClick={triggerProcessing} disabled={triggering}
+            className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors flex items-center gap-2">
+            {triggering ? '⏳ Triggering…' : `▶ Process Now${pendingCount > 0 ? ` (${pendingCount} pending)` : ''}`}
+          </button>
+          {triggerMsg && (
+            <span className={`text-xs px-3 py-1.5 rounded-lg ${triggerMsg.type === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>
+              {triggerMsg.type === 'ok' ? '✓ ' : '✗ '}{triggerMsg.text}
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
