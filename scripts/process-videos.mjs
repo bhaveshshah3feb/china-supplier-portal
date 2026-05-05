@@ -324,13 +324,18 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
         ]),
       ].join(',')
 
-      // Build filter_complex — overlay logo inside its box if available
+      // Images need explicit RGB24 conversion first — handles CMYK, grayscale,
+      // and any colour space that FFmpeg's overlay filter can't accept directly.
+      // Videos do not need this (libx264 handles conversion internally).
+      const imgFmt     = isImage ? 'format=rgb24,' : ''
+      const logoFmt    = isImage ? ',format=rgba'  : ''
+
       const filterComplex = hasLogo
-        ? `[0:v]${videoFilters}[vid];[1:v]scale=${WM.logoSize}:${WM.logoSize}[logo];[vid][logo]overlay=${WM.logoPad}:${WM.logoPad}[out]`
-        : `[0:v]${videoFilters}[out]`
+        ? `[0:v]${imgFmt}${videoFilters}[vid];[1:v]scale=${WM.logoSize}:${WM.logoSize}${logoFmt}[logo];[vid][logo]overlay=${WM.logoPad}:${WM.logoPad}[out]`
+        : `[0:v]${imgFmt}${videoFilters}[out]`
 
       // Different output format + FFmpeg flags for images vs videos
-      const salesExt  = isImage ? (origExt || '.jpg') : '.mp4'
+      const salesExt  = isImage ? '.jpg' : '.mp4'   // always output JPEG (not .jpeg/.png) for consistency
       const tmpOutput = join(TMP, `output_${jobId}${salesExt}`)
 
       const logoInput = hasLogo ? `-i "${LOGO_PATH}"` : ''
@@ -339,7 +344,7 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
         if (isImage) {
           console.log('  Running FFmpeg for image watermark...')
           await execAsync(
-            `ffmpeg -i "${tmpInput}" ${logoInput} -filter_complex "${filterComplex}" -map "[out]" -frames:v 1 "${tmpOutput}" -y`,
+            `ffmpeg -i "${tmpInput}" ${logoInput} -filter_complex "${filterComplex}" -map "[out]" -q:v 2 -frames:v 1 "${tmpOutput}" -y`,
             { maxBuffer: 1024 * 1024 * 100 }
           )
         } else {
@@ -351,9 +356,11 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
         }
         console.log('  Watermark applied')
       } catch (ffErr) {
-        console.error('  FFmpeg error:', ffErr.message)
+        // Capture the actual FFmpeg stderr — this is what tells us the real error
+        const stderr = (ffErr.stderr || '').slice(-3000)
+        console.error('  FFmpeg stderr:\n', stderr || '(empty)')
         console.error('  filter_complex:', filterComplex)
-        throw new Error(`FFmpeg failed: ${ffErr.message}`)
+        throw new Error(`FFmpeg failed: ${stderr || ffErr.message}`)
       }
 
       if (!existsSync(tmpOutput)) {
@@ -366,7 +373,7 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       const { error: upErr } = await supabase.storage
         .from('sales')
         .upload(salesFilename, outputBuffer, {
-          contentType: isImage ? (upload.mime_type || 'image/jpeg') : 'video/mp4',
+          contentType: isImage ? 'image/jpeg' : 'video/mp4',
           upsert: true,
         })
       if (upErr) throw new Error(`Sales upload failed: ${upErr.message}`)

@@ -1,0 +1,38 @@
+name: Analyze & Auto-Fix Failures
+
+on:
+  workflow_run:
+    workflows: ["Process Videos"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to commit auto-fixes to process-videos.mjs
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Analyze failures and auto-fix
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          CLAUDE_API_KEY:       ${{ secrets.CLAUDE_API_KEY }}
+          GMAIL_USER:           ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD:   ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: node scripts/analyze-failures.mjs
