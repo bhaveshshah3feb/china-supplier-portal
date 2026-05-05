@@ -38,16 +38,30 @@ const hasBoldFont = existsSync(BOLD_FONT)
 if (!hasBoldFont) console.warn(`⚠️  Bold font not found at ${BOLD_FONT} — using FFmpeg default`)
 const fontArg = hasBoldFont ? `:fontfile=${BOLD_FONT}` : ''
 
-// ── Watermark config ─────────────────────────────────────────
+// ── Watermark config (text only — sizes are computed dynamically per file) ──
 const WM = {
-  name:     'Bhavesh - Aryan Amusements',
-  phone:    '+91 9841081945',
-  logoSize: 100,  // logo rendered at 100×100 px
-  logoPad:  5,    // padding around logo inside its box
-  textW:    330,  // width of text area beside the logo
-  totalH:   110,  // height of the combined top-left watermark band
-  srcH:     38,   // SRC code box height (bottom-right corner)
-  srcW:     220,  // SRC code box width (bottom-right corner)
+  name:  'Bhavesh - Aryan Amusements',
+  phone: '+91 9841081945',
+}
+
+// Compute watermark dimensions proportional to video/image width so the
+// overlay looks consistent at every resolution (720p, 1080p, 4K, etc.)
+function calcWM(vidW) {
+  const bandH   = Math.max(80, Math.min(220, Math.round(vidW * 0.075)))
+  const logoSz  = Math.round(bandH * 0.80)
+  const logoPad = Math.round(bandH * 0.10)
+  const logoBoxW = logoSz + 2 * logoPad
+  const textW   = Math.round(vidW * 0.22)
+  const textX   = logoBoxW + logoPad
+  const phoneFs = Math.round(bandH * 0.28)
+  const nameFs  = Math.round(bandH * 0.20)
+  const srcH    = Math.round(bandH * 0.40)
+  const srcW    = Math.round(vidW * 0.16)
+  const srcFs   = Math.round(srcH  * 0.38)
+  const phY     = Math.round(bandH * 0.10)
+  const nmY     = Math.round(bandH * 0.56)
+  return { bandH, logoSz, logoPad, logoBoxW, textW, textX,
+           phoneFs, nameFs, srcH, srcW, srcFs, phY, nmY }
 }
 
 // ── Auto-heal: queue uploads that never got a processing job ─
@@ -95,27 +109,58 @@ async function autoQueueOrphans() {
   )
 }
 
+// ── Reset jobs stuck in "processing" (runner was killed mid-job) ──────
+async function resetStuckJobs() {
+  const stuckSince = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+  const { data: stuck } = await supabase
+    .from('processing_queue')
+    .select('id, upload_id')
+    .eq('status', 'processing')
+    .lt('started_at', stuckSince)
+  if (!stuck?.length) return
+  console.log(`Resetting ${stuck.length} job(s) stuck in "processing" → "pending"`)
+  const ids       = stuck.map(j => j.id)
+  const uploadIds = [...new Set(stuck.map(j => j.upload_id).filter(Boolean))]
+  await supabase.from('processing_queue')
+    .update({ status: 'pending', started_at: null })
+    .in('id', ids)
+  if (uploadIds.length) {
+    await supabase.from('uploads')
+      .update({ processing_status: 'pending' })
+      .in('id', uploadIds)
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────
 async function main() {
   console.log('Checking for pending jobs...')
+  await resetStuckJobs()
   await autoQueueOrphans()
 
-  const { data: jobs, error } = await supabase
-    .from('processing_queue')
-    .select('*, uploads(*, suppliers(supplier_code, company_name_en), main_categories!main_category_id(slug,name_en), sub_categories!sub_category_id(slug,name_en))')
-    .eq('status', 'pending')
-    .lt('attempts', 3)
-    .order('created_at')
-    .limit(5)
+  // Process ALL pending jobs — fetch in batches of 20 and keep looping
+  // until the queue is empty or no progress is made.
+  let totalProcessed = 0
+  while (true) {
+    const { data: jobs, error } = await supabase
+      .from('processing_queue')
+      .select('*, uploads(*, suppliers(supplier_code, company_name_en), main_categories!main_category_id(slug,name_en), sub_categories!sub_category_id(slug,name_en))')
+      .eq('status', 'pending')
+      .lt('attempts', 3)
+      .order('created_at')
+      .limit(20)
 
-  if (error) { console.error('DB error:', error); process.exit(1) }
-  if (!jobs || jobs.length === 0) { console.log('No pending jobs. Done.'); return }
+    if (error) { console.error('DB error:', error); process.exit(1) }
+    if (!jobs || jobs.length === 0) break
 
-  console.log(`Found ${jobs.length} job(s)`)
-
-  for (const job of jobs) {
-    await processJob(job)
+    console.log(`\nProcessing batch of ${jobs.length} job(s) (total so far: ${totalProcessed})`)
+    for (const job of jobs) {
+      await processJob(job)
+      totalProcessed++
+    }
   }
+
+  if (totalProcessed === 0) console.log('No pending jobs. Done.')
+  else console.log(`\nAll done — processed ${totalProcessed} job(s) this run.`)
 }
 
 // ── Process one job ───────────────────────────────────────────
@@ -310,36 +355,37 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       const hasLogo = existsSync(LOGO_PATH)
       console.log(`  Logo file: ${hasLogo ? 'found' : 'NOT FOUND — text-only fallback'}`)
 
+      // Detect actual pixel dimensions so the watermark scales correctly
+      let vidW = 1920
+      try {
+        const { stdout: dimOut } = await execAsync(
+          `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${tmpInput}"`
+        )
+        const parts = dimOut.trim().split(',').map(Number)
+        if (parts[0] > 0) vidW = parts[0]
+        console.log(`  Dimensions: ${parts[0]}x${parts[1]}`)
+      } catch { console.warn('  Could not detect dimensions — defaulting to 1920px wide') }
+
+      // All sizes scale proportionally with video width
+      const { bandH, logoSz, logoPad, logoBoxW, textW, textX,
+              phoneFs, nameFs, srcH, srcW, srcFs, phY, nmY } = calcWM(vidW)
+
+      console.log(`  Watermark band: ${bandH}px tall, logo: ${logoSz}px, phone: ${phoneFs}pt, name: ${nameFs}pt`)
+
       // Escape text values for FFmpeg drawtext filter
       const escapedName  = WM.name.replace(/'/g, "\\'" ).replace(/:/g, '\\:')
       const escapedPhone = WM.phone.replace(/'/g, "\\'" ).replace(/:/g, '\\:')
       const escapedCode  = supplierCode.replace(/'/g, "\\'" ).replace(/:/g, '\\:')
 
-      // Derived dimensions
-      const logoBoxW = WM.logoSize + (2 * WM.logoPad)  // 110 — logo bg box width
-      const textW    = WM.textW                          // 330 — text area width
-      const totalH   = WM.totalH                         // 110 — unified band height
-      const srcH     = WM.srcH                           // 38
-      const srcW     = WM.srcW                           // 220
-      const textX    = logoBoxW + 10                     // 120 — text starts here (absolute)
-
-      // Video-stream filters: logo box + text box are flush (no gap), same height
       const videoFilters = [
-        // Logo background box (top-left)
-        `drawbox=x=0:y=0:w=${logoBoxW}:h=${totalH}:color=black@0.75:t=fill`,
-        // Text area — flush against logo box, same height
-        `drawbox=x=${logoBoxW}:y=0:w=${textW}:h=${totalH}:color=black@0.75:t=fill`,
-        // SRC code box (bottom-right corner)
+        `drawbox=x=0:y=0:w=${logoBoxW}:h=${bandH}:color=black@0.75:t=fill`,
+        `drawbox=x=${logoBoxW}:y=0:w=${textW}:h=${bandH}:color=black@0.75:t=fill`,
         `drawbox=x=iw-${srcW}:y=ih-${srcH}:w=${srcW}:h=${srcH}:color=black@0.75:t=fill`,
-        // Phone number — bold yellow, absolute x so it can never overflow
-        `drawtext=text='${escapedPhone}':x=${textX}:y=12:fontsize=28:fontcolor=yellow@0.95${fontArg}:shadowx=1:shadowy=1`,
-        // Contact name — bold white
-        `drawtext=text='${escapedName}':x=${textX}:y=62:fontsize=20:fontcolor=white${fontArg}:shadowx=1:shadowy=1`,
-        // SRC code (bottom-right)
-        `drawtext=text='SRC\\: ${escapedCode}':x=W-${srcW - 10}:y=H-${srcH - 12}:fontsize=13:fontcolor=white@0.65`,
-        // Fallback if no logo: show name in the logo box area
+        `drawtext=text='${escapedPhone}':x=${textX}:y=${phY}:fontsize=${phoneFs}:fontcolor=yellow@0.95${fontArg}:shadowx=2:shadowy=2`,
+        `drawtext=text='${escapedName}':x=${textX}:y=${nmY}:fontsize=${nameFs}:fontcolor=white${fontArg}:shadowx=1:shadowy=1`,
+        `drawtext=text='SRC\\: ${escapedCode}':x=W-${srcW - Math.round(srcW*0.05)}:y=H-${Math.round(srcH*0.65)}:fontsize=${srcFs}:fontcolor=white@0.65`,
         ...(hasLogo ? [] : [
-          `drawtext=text='Aryan':x=6:y=30:fontsize=18:fontcolor=white${fontArg}:shadowx=1:shadowy=1`,
+          `drawtext=text='Aryan':x=${logoPad}:y=${Math.round(bandH*0.35)}:fontsize=${nameFs}:fontcolor=white${fontArg}`,
         ]),
       ].join(',')
 
@@ -355,10 +401,10 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       // Video filter: no explicit format — libx264 handles conversion itself.
       const filterComplex = isImage
         ? (hasLogo
-            ? `[0:v]${videoFilters}[vid];[1:v]scale=${WM.logoSize}:${WM.logoSize}[logo];[vid][logo]overlay=${WM.logoPad}:${WM.logoPad},format=yuvj420p[out]`
+            ? `[0:v]${videoFilters}[vid];[1:v]scale=${logoSz}:${logoSz}[logo];[vid][logo]overlay=${logoPad}:${logoPad},format=yuvj420p[out]`
             : `[0:v]${videoFilters},format=yuvj420p[out]`)
         : (hasLogo
-            ? `[0:v]${videoFilters}[vid];[1:v]scale=${WM.logoSize}:${WM.logoSize}[logo];[vid][logo]overlay=${WM.logoPad}:${WM.logoPad}[out]`
+            ? `[0:v]${videoFilters}[vid];[1:v]scale=${logoSz}:${logoSz}[logo];[vid][logo]overlay=${logoPad}:${logoPad}[out]`
             : `[0:v]${videoFilters}[out]`)
 
       const ffCmd = isImage
