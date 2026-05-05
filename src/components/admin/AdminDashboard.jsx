@@ -19,7 +19,7 @@ const TABS = [
   { key: 'uploads',      icon: '📁', label: 'Uploads' },
   { key: 'processing',   icon: '⚙️',  label: 'Processing' },
   { key: 'categories',   icon: '🗂️',  label: 'Categories' },
-  { key: 'logs',         icon: '📋', label: 'Logs' },
+  { key: 'logs',         icon: '📋', label: 'Processing Log' },
   { key: 'settings',     icon: '⚙',  label: 'Settings' },
 ]
 
@@ -102,6 +102,9 @@ export default function AdminDashboard() {
               )}
               {key === 'processing' && stats?.pendingJobs > 0 && (
                 <span className="bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0.5 rounded-full font-medium">{stats.pendingJobs}</span>
+              )}
+              {key === 'logs' && stats?.failedJobs > 0 && (
+                <span className="bg-red-100 text-red-700 text-[10px] px-1.5 py-0.5 rounded-full font-medium">{stats.failedJobs}</span>
               )}
             </button>
           ))}

@@ -134,7 +134,7 @@ export default function UploadsTab() {
       })
       const body = await res.json()
       if (body.ok) {
-        setTriggerMsg({ type: 'ok', text: 'Workflow triggered! Processing starts in ~30 seconds.' })
+        setTriggerMsg({ type: 'ok', text: 'Workflow triggered on GitHub! Check the Logs tab in ~60 seconds for progress.' })
       } else {
         setTriggerMsg({ type: 'err', text: body.error || 'Failed to trigger' })
       }
@@ -202,7 +202,7 @@ export default function UploadsTab() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  {['','File','Supplier','Type','Category','Size','Status','Date',''].map(h => (
+                  {['','File','Supplier','Type','Category','Size','Status','Uploaded',''].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
                   ))}
                 </tr>
@@ -234,8 +234,11 @@ export default function UploadsTab() {
                         {u.processing_status}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">
-                      {new Date(u.created_at).toLocaleDateString()}
+                    <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">
+                      {new Date(u.created_at).toLocaleString('en-IN', {
+                        day: 'numeric', month: 'short', year: 'numeric',
+                        hour: '2-digit', minute: '2-digit', hour12: true,
+                      })}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1">
