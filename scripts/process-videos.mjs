@@ -155,6 +155,19 @@ async function processJob(job) {
 
     // ── CATEGORIZE job (videos only) ───────────────────────
     if (job_type === 'categorize') {
+      // Skip categorize job for images — images are already single frames
+      if (upload.file_type === 'image') {
+        console.log('  Image file — skipping frame extraction (categorize not applicable)')
+        // Queue the watermark job directly
+        await supabase.from('processing_queue').insert([{
+          upload_id: upload.id,
+          job_type:  'watermark',
+          status:    'pending',
+        }])
+        await completeJob(jobId)
+        return
+      }
+
       const { stdout: probeOut } = await execAsync(
         `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${tmpInput}"`
       )
@@ -298,9 +311,9 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       console.log(`  Logo file: ${hasLogo ? 'found' : 'NOT FOUND — text-only fallback'}`)
 
       // Escape text values for FFmpeg drawtext filter
-      const escapedName  = WM.name.replace(/'/g, "\\'").replace(/:/g, '\\:')
-      const escapedPhone = WM.phone.replace(/'/g, "\\'").replace(/:/g, '\\:')
-      const escapedCode  = supplierCode.replace(/'/g, "\\'").replace(/:/g, '\\:')
+      const escapedName  = WM.name.replace(/'/g, "\\'" ).replace(/:/g, '\\:')
+      const escapedPhone = WM.phone.replace(/'/g, "\\'" ).replace(/:/g, '\\:')
+      const escapedCode  = supplierCode.replace(/'/g, "\\'" ).replace(/:/g, '\\:')
 
       // Derived dimensions
       const logoBoxW = WM.logoSize + (2 * WM.logoPad)  // 110 — logo bg box width
