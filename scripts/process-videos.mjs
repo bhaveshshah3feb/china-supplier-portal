@@ -343,43 +343,40 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
         ]),
       ].join(',')
 
-      // Images need explicit RGB24 conversion first — handles CMYK, grayscale,
-      // and any colour space that FFmpeg's overlay filter can't accept directly.
-      // Videos do not need this (libx264 handles conversion internally).
-      const imgFmt     = isImage ? 'format=rgb24,' : ''
-      const logoFmt    = isImage ? ',format=rgba'  : ''
-
-      const filterComplex = hasLogo
-        ? `[0:v]${imgFmt}${videoFilters}[vid];[1:v]scale=${WM.logoSize}:${WM.logoSize}${logoFmt}[logo];[vid][logo]overlay=${WM.logoPad}:${WM.logoPad}[out]`
-        : `[0:v]${imgFmt}${videoFilters}[out]`
-
-      // Different output format + FFmpeg flags for images vs videos
-      const salesExt  = isImage ? '.jpg' : '.mp4'   // always output JPEG (not .jpeg/.png) for consistency
+      const salesExt  = isImage ? '.jpg' : '.mp4'
       const tmpOutput = join(TMP, `output_${jobId}${salesExt}`)
-
       const logoInput = hasLogo ? `-i "${LOGO_PATH}"` : ''
 
+      // Image filter: DO NOT use format=rgb24 — it causes a pixel-format
+      // mismatch with the JPEG encoder. Instead let FFmpeg stay in the native
+      // JPEG colour space (yuvj420p) and convert ONLY at the very end so the
+      // mjpeg encoder always receives a compatible format.
+      //
+      // Video filter: no explicit format — libx264 handles conversion itself.
+      const filterComplex = isImage
+        ? (hasLogo
+            ? `[0:v]${videoFilters}[vid];[1:v]scale=${WM.logoSize}:${WM.logoSize}[logo];[vid][logo]overlay=${WM.logoPad}:${WM.logoPad},format=yuvj420p[out]`
+            : `[0:v]${videoFilters},format=yuvj420p[out]`)
+        : (hasLogo
+            ? `[0:v]${videoFilters}[vid];[1:v]scale=${WM.logoSize}:${WM.logoSize}[logo];[vid][logo]overlay=${WM.logoPad}:${WM.logoPad}[out]`
+            : `[0:v]${videoFilters}[out]`)
+
+      const ffCmd = isImage
+        ? `ffmpeg -i "${tmpInput}" ${logoInput} -filter_complex "${filterComplex}" -map "[out]" -q:v 2 -frames:v 1 "${tmpOutput}" -y`
+        : `ffmpeg -i "${tmpInput}" ${logoInput} -filter_complex "${filterComplex}" -map "[out]" -map 0:a? -c:v libx264 -crf 23 -preset fast "${tmpOutput}" -y`
+
+      console.log(`  FFmpeg (${isImage ? 'image' : 'video'}) command:`, ffCmd)
+
       try {
-        if (isImage) {
-          console.log('  Running FFmpeg for image watermark...')
-          await execAsync(
-            `ffmpeg -i "${tmpInput}" ${logoInput} -filter_complex "${filterComplex}" -map "[out]" -q:v 2 -frames:v 1 "${tmpOutput}" -y`,
-            { maxBuffer: 1024 * 1024 * 100 }
-          )
-        } else {
-          console.log('  Running FFmpeg for video watermark...')
-          await execAsync(
-            `ffmpeg -i "${tmpInput}" ${logoInput} -filter_complex "${filterComplex}" -map "[out]" -map 0:a? -c:v libx264 -crf 23 -preset fast "${tmpOutput}" -y`,
-            { maxBuffer: 1024 * 1024 * 100 }
-          )
-        }
-        console.log('  Watermark applied')
+        await execAsync(ffCmd, { maxBuffer: 1024 * 1024 * 100 })
+        console.log('  Watermark applied successfully')
       } catch (ffErr) {
-        // Capture the actual FFmpeg stderr — this is what tells us the real error
-        const stderr = (ffErr.stderr || '').slice(-3000)
-        console.error('  FFmpeg stderr:\n', stderr || '(empty)')
-        console.error('  filter_complex:', filterComplex)
-        throw new Error(`FFmpeg failed: ${stderr || ffErr.message}`)
+        // Capture BOTH stderr and stdout — FFmpeg sometimes writes errors to stdout
+        const details = [ffErr.stderr, ffErr.stdout, ffErr.message]
+          .filter(Boolean).join('\n').slice(-3000)
+        console.error('  ══ FFmpeg FAILED ══')
+        console.error('  Error output:', details)
+        throw new Error(`FFmpeg failed: ${details}`)
       }
 
       if (!existsSync(tmpOutput)) {
