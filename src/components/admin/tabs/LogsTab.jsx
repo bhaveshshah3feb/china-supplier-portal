@@ -84,6 +84,12 @@ export default function LogsTab() {
     setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'pending', attempts: 0, error_log: null } : j))
   }
 
+  async function deleteJob(id) {
+    if (!window.confirm('Delete this job from the queue? This cannot be undone.')) return
+    await supabase.from('processing_queue').delete().eq('id', id)
+    setJobs(prev => prev.filter(j => j.id !== id))
+  }
+
   const failed = jobs.filter(j => j.status === 'failed').length
 
   return (
@@ -172,12 +178,18 @@ export default function LogsTab() {
                       <ErrorCell log={j.error_log} />
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      {(j.status === 'failed' || j.status === 'pending') && (
-                        <button onClick={() => retryJob(j.id)}
-                          className="text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 px-2 py-1 rounded-lg transition-colors">
-                          Retry
+                      <div className="flex gap-1">
+                        {(j.status === 'failed' || j.status === 'pending') && (
+                          <button onClick={() => retryJob(j.id)}
+                            className="text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 px-2 py-1 rounded-lg transition-colors">
+                            Retry
+                          </button>
+                        )}
+                        <button onClick={() => deleteJob(j.id)}
+                          className="text-xs bg-red-50 text-red-500 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors">
+                          Delete
                         </button>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 ))}

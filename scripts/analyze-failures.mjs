@@ -32,20 +32,30 @@ const supabase  = createClient(
 const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY })
 
 // ── Error classification ──────────────────────────────────────
+// PERMANENT: file doesn't exist or is corrupt — retrying will never help
+const PERMANENT_PATTERNS = [
+  /object not found/i, /no such key/i, /upload record not found/i,
+  /storage.*404/i,
+]
+// TRANSIENT: network blip — safe to retry
 const TRANSIENT_PATTERNS = [
-  /download failed/i, /connection reset/i, /network/i,
-  /econnreset/i, /etimedout/i, /econnrefused/i,
-  /sales upload failed/i, /socket hang up/i, /timed out/i,
+  /connection reset/i, /network/i, /econnreset/i,
+  /etimedout/i, /econnrefused/i, /socket hang up/i, /timed out/i,
+  /sales upload failed/i,
+  // "Download failed" WITHOUT "not found" is a network issue
+  /download failed(?!.*not found)/i,
 ]
 const FFMPEG_PATTERNS = [
   /ffmpeg failed/i, /ffmpeg error/i, /undefined constant/i,
   /invalid option/i, /no such filter/i, /invalid data/i,
   /could not extract frames/i, /filter_complex/i,
+  /pixel format/i, /codec not found/i,
 ]
 
 function classify(errorLog) {
   const log = errorLog || ''
   if (!log) return 'no-log'
+  if (PERMANENT_PATTERNS.some(p => p.test(log))) return 'permanent'
   if (TRANSIENT_PATTERNS.some(p => p.test(log))) return 'transient'
   if (FFMPEG_PATTERNS.some(p => p.test(log)))    return 'ffmpeg'
   return 'unknown'
@@ -158,7 +168,7 @@ async function sendEmail(cfg, subject, html) {
 }
 
 // ── Build email HTML ──────────────────────────────────────────
-function buildEmail({ failures, transient, ffmpegJobs, unknown, noLog, claudeResult, codeFixed, gitError }) {
+function buildEmail({ failures, permanent, transient, ffmpegJobs, unknown, claudeResult, codeFixed, gitError }) {
   const date = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })
   const totalRequeued = failures.length  // we re-queue all of them
 
@@ -247,13 +257,24 @@ async function main() {
   console.log(`Found ${failures.length} failure(s)`)
   failures.forEach(j => console.log(`  [${classify(j.error_log)}] ${j.uploads?.original_filename || j.id}: ${(j.error_log || 'no log').slice(0, 100)}`))
 
+  const permanent  = failures.filter(j => classify(j.error_log) === 'permanent')
   const transient  = failures.filter(j => classify(j.error_log) === 'transient')
   const ffmpegJobs = failures.filter(j => classify(j.error_log) === 'ffmpeg')
   const unknown    = failures.filter(j => ['unknown', 'no-log'].includes(classify(j.error_log)))
 
-  // Re-queue ALL failed jobs — transient ones will just work on retry;
-  // code-error ones will benefit from any fix Claude applies below.
-  await requeueJobs(failures, 'all categories')
+  // Permanent failures (missing file, corrupt upload) — mark as dead, do NOT re-queue.
+  // Re-queuing these causes an infinite loop since the underlying cause can't be fixed by retrying.
+  if (permanent.length > 0) {
+    const ids = permanent.map(j => j.id)
+    await supabase.from('processing_queue')
+      .update({ status: 'failed', error_log: permanent[0]?.error_log }) // keep error, don't reset
+      .in('id', ids)
+    console.log(`Marked ${permanent.length} permanent failure(s) as dead (won't re-queue)`)
+  }
+
+  // Re-queue all non-permanent failures
+  const toRequeue = [...transient, ...ffmpegJobs, ...unknown]
+  if (toRequeue.length > 0) await requeueJobs(toRequeue, 'transient + ffmpeg + unknown')
 
   // Ask Claude to diagnose FFmpeg/code-level failures
   let claudeResult = null
@@ -285,9 +306,9 @@ async function main() {
 
   const subject = codeFixed
     ? `✅ Auto-fixed & re-queued ${failures.length} processing failure(s)`
-    : `⚠️ ${failures.length} processing failure(s) re-queued for retry`
+    : `⚠️ ${failures.length} processing failure(s) — ${permanent.length} permanent, ${toRequeue.length} re-queued`
 
-  const html = buildEmail({ failures, transient, ffmpegJobs, unknown, claudeResult, codeFixed, gitError })
+  const html = buildEmail({ failures, permanent, transient, ffmpegJobs, unknown, claudeResult, codeFixed, gitError })
 
   try {
     await sendEmail(cfg, subject, html)
