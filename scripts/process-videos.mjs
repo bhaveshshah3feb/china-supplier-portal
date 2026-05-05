@@ -32,6 +32,12 @@ if (!existsSync(TMP)) mkdirSync(TMP, { recursive: true })
 const LOGO_PATH = join(__dirname, 'assets', 'aryan-logo.jpg')
 const BOLD_FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 
+// Font is optional — if not installed, FFmpeg uses its built-in default.
+// Drawtext still works; text won't be bold but the job won't fail.
+const hasBoldFont = existsSync(BOLD_FONT)
+if (!hasBoldFont) console.warn(`⚠️  Bold font not found at ${BOLD_FONT} — using FFmpeg default`)
+const fontArg = hasBoldFont ? `:fontfile=${BOLD_FONT}` : ''
+
 // ── Watermark config ─────────────────────────────────────────
 const WM = {
   name:     'Bhavesh - Aryan Amusements',
@@ -313,14 +319,14 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
         // SRC code box (bottom-right corner)
         `drawbox=x=iw-${srcW}:y=ih-${srcH}:w=${srcW}:h=${srcH}:color=black@0.75:t=fill`,
         // Phone number — bold yellow, absolute x so it can never overflow
-        `drawtext=text='${escapedPhone}':x=${textX}:y=12:fontsize=28:fontcolor=yellow@0.95:fontfile=${BOLD_FONT}:shadowx=1:shadowy=1`,
+        `drawtext=text='${escapedPhone}':x=${textX}:y=12:fontsize=28:fontcolor=yellow@0.95${fontArg}:shadowx=1:shadowy=1`,
         // Contact name — bold white
-        `drawtext=text='${escapedName}':x=${textX}:y=62:fontsize=20:fontcolor=white:fontfile=${BOLD_FONT}:shadowx=1:shadowy=1`,
+        `drawtext=text='${escapedName}':x=${textX}:y=62:fontsize=20:fontcolor=white${fontArg}:shadowx=1:shadowy=1`,
         // SRC code (bottom-right)
         `drawtext=text='SRC\\: ${escapedCode}':x=W-${srcW - 10}:y=H-${srcH - 12}:fontsize=13:fontcolor=white@0.65`,
         // Fallback if no logo: show name in the logo box area
         ...(hasLogo ? [] : [
-          `drawtext=text='Aryan':x=6:y=30:fontsize=18:fontcolor=white:fontfile=${BOLD_FONT}:shadowx=1:shadowy=1`,
+          `drawtext=text='Aryan':x=6:y=30:fontsize=18:fontcolor=white${fontArg}:shadowx=1:shadowy=1`,
         ]),
       ].join(',')
 

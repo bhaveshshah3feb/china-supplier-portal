@@ -4,10 +4,13 @@ on:
   workflow_run:
     workflows: ["Process Videos"]
     types: [completed]
+  schedule:
+    # Fallback: also runs at 4:30 AM UTC (10:00 AM IST) daily
+    - cron: '30 4 * * *'
   workflow_dispatch:
 
 permissions:
-  contents: write   # needed to commit auto-fixes to process-videos.mjs
+  contents: write   # required to commit auto-fixes to process-videos.mjs
 
 jobs:
   analyze:
@@ -15,10 +18,12 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout repo
+      - name: Checkout master branch
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          ref: master          # always checkout master, never detached HEAD
+          fetch-depth: 0       # full history needed for rebasing
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
