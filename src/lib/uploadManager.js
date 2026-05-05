@@ -2,17 +2,18 @@ import * as tus from 'tus-js-client'
 import { supabase } from './supabase.js'
 
 const SUPABASE_URL    = import.meta.env.VITE_SUPABASE_URL
+const SUPABASE_ANON   = import.meta.env.VITE_SUPABASE_ANON_KEY
 const TUS_ENDPOINT    = `${SUPABASE_URL}/storage/v1/upload/resumable`
 
-// Small chunks = less data lost per retry = faster recovery on slow/unstable connections.
-// 512 KB is the sweet spot for China connections (was 6 MB — far too large).
+// Files under this threshold use a single PUT request instead of TUS.
+// TUS adds ~200 ms of round-trip overhead PER CHUNK (worse on China connections).
+// A 5 MB image with 512 KB chunks = 10 round-trips = 2+ extra seconds wasted.
+// Direct upload = 1 request, 3–5× faster for small files.
+const DIRECT_THRESHOLD = 10 * 1024 * 1024   // 10 MB
+
+// TUS settings — only used for large files
 const CHUNK_SIZE      = 512 * 1024
-
-// 2 concurrent uploads — enough throughput without saturating limited bandwidth.
-const MAX_CONCURRENT  = 2
-
-// 7 retries with short initial delay — recovers quickly from the brief interruptions
-// common on GFW-routed connections.
+const MAX_CONCURRENT  = 3   // 3 concurrent — OK for a mix of large+small files
 const RETRY_DELAYS    = [0, 1000, 2000, 4000, 8000, 16000, 30000]
 
 const active = new Map()
@@ -60,7 +61,12 @@ function tryDequeue() {
   while (running < MAX_CONCURRENT && queue.length > 0) {
     const item = queue.shift()
     running++
-    _startTus(item)
+    // Route: small files → direct PUT (fast), large files → TUS (resumable)
+    if (item.file.size < DIRECT_THRESHOLD) {
+      _startDirect(item)
+    } else {
+      _startTus(item)
+    }
   }
 }
 
@@ -70,6 +76,59 @@ export function enqueue(item) {
   tryDequeue()
 }
 
+// ── Direct upload (single PUT) — for files under DIRECT_THRESHOLD ──────
+async function _startDirect({ uploadId, file, storagePath, accessToken, dbId, bucketName = 'uploads' }) {
+  emit({ type: 'STARTED', uploadId })
+  try {
+    // Report 0% immediately
+    emit({ type: 'PROGRESS', uploadId, pct: 0, bytesUploaded: 0, bytesTotal: file.size, speed: 0, eta: '—' })
+
+    const res = await fetch(
+      `${SUPABASE_URL}/storage/v1/object/${bucketName}/${storagePath}`,
+      {
+        method:  'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type':  file.type || 'application/octet-stream',
+          'x-upsert':      'true',
+          'apikey':        SUPABASE_ANON,
+        },
+        body: file,
+      }
+    )
+
+    if (!res.ok) {
+      const txt = await res.text()
+      throw new Error(`Upload failed (${res.status}): ${txt}`)
+    }
+
+    active.delete(uploadId)
+    running--
+    emit({ type: 'PROGRESS', uploadId, pct: 100, bytesUploaded: file.size, bytesTotal: file.size, speed: 0, eta: '0s' })
+    emit({ type: 'COMPLETE', uploadId, storagePath })
+    tryDequeue()
+
+    if (dbId) {
+      try {
+        await supabase.from('uploads').update({ upload_status: 'completed' }).eq('id', dbId)
+        await supabase.from('processing_queue').insert({ upload_id: dbId, job_type: 'categorize', status: 'pending' })
+      } catch (err) {
+        console.error('Failed to update DB after direct upload:', err)
+      }
+    }
+  } catch (err) {
+    active.delete(uploadId)
+    running--
+    const msg = err.message || String(err)
+    emit({ type: 'ERROR', uploadId, error: msg })
+    if (dbId) {
+      supabase.from('uploads').update({ upload_status: 'failed', error_message: msg }).eq('id', dbId).then(() => {})
+    }
+    tryDequeue()
+  }
+}
+
+// ── TUS upload (resumable) — for files over DIRECT_THRESHOLD ────────────
 function _startTus({ uploadId, file, storagePath, accessToken, dbId, bucketName = 'uploads' }) {
   let lastBytes = 0
   let lastTime  = Date.now()

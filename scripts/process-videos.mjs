@@ -44,31 +44,36 @@ const WM = {
   phone: '+91 9841081945',
 }
 
-// Compute watermark dimensions proportional to video/image width.
-// No upper cap — a 4K or iPhone image gets a 4K-sized watermark.
-// Rule of thumb: band = 7.5% of width, minimum 80px.
-function calcWM(vidW) {
-  const bandH   = Math.max(80, Math.round(vidW * 0.075))  // no cap
+// Watermark dimensions are based on FRAME HEIGHT, not width.
+// The band is horizontal, so its visual weight is determined by
+// what fraction of the total height it occupies — not the width.
+// Using width gave inconsistent results across different aspect ratios.
+//
+// Formula: bandH = 13% of vidH, min 80 px
+//
+// Sanity table:
+//   720p  (1280×720):   bandH= 94px, logo= 75px, phone=26pt, name=16pt
+//   1080p (1920×1080):  bandH=140px, logo=112px, phone=39pt, name=24pt
+//   4K    (3840×2160):  bandH=281px, logo=225px, phone=79pt, name=48pt
+//   iPhone(4032×3024):  bandH=393px, logo=314px, phone=110pt,name=67pt ← finally visible!
+//   Portrait(1080×1920):bandH=250px, logo=200px, phone=70pt, name=43pt
+function calcWM(vidW, vidH) {
+  const bandH   = Math.max(80, Math.round(vidH * 0.13))
   const logoSz  = Math.round(bandH * 0.80)
   const logoPad = Math.round(bandH * 0.10)
   const logoBoxW = logoSz + 2 * logoPad
-  const textW   = Math.round(vidW * 0.25)   // 25% of width (was 22%, needed for long name)
+  const textW   = Math.round(vidW * 0.28)   // 28% of width — wide enough for the full name
   const textX   = logoBoxW + logoPad
   const phoneFs = Math.round(bandH * 0.28)
-  const nameFs  = Math.round(bandH * 0.17)  // 17% of band (was 20% — overflowed on wide images)
-  const srcH    = Math.round(bandH * 0.40)
-  const srcW    = Math.round(vidW * 0.16)
-  const srcFs   = Math.round(srcH  * 0.38)
+  const nameFs  = Math.round(bandH * 0.17)
+  const srcH    = Math.round(bandH * 0.38)
+  const srcW    = Math.round(vidW * 0.18)
+  const srcFs   = Math.round(srcH  * 0.36)
   const phY     = Math.round(bandH * 0.10)
   const nmY     = Math.round(bandH * 0.56)
   return { bandH, logoSz, logoPad, logoBoxW, textW, textX,
            phoneFs, nameFs, srcH, srcW, srcFs, phY, nmY }
 }
-// Quick sanity table (approximate):
-// 720p  (1280px): band=96px,  logo=77px,  phone=27pt, name=16pt
-// 1080p (1920px): band=144px, logo=115px, phone=40pt, name=24pt
-// 4K    (3840px): band=288px, logo=230px, phone=81pt, name=49pt
-// iPhone(4032px): band=302px, logo=242px, phone=85pt, name=51pt
 
 // ── Auto-heal: queue uploads that never got a processing job ─
 async function autoQueueOrphans() {
@@ -206,15 +211,36 @@ async function processJob(job) {
 
     // ── CATEGORIZE job (videos only) ───────────────────────
     if (job_type === 'categorize') {
-      // Skip categorize job for images — images are already single frames
+      // Images don't need frame extraction — run logo detection directly on the image
       if (upload.file_type === 'image') {
-        console.log('  Image file — skipping frame extraction (categorize not applicable)')
-        // Queue the watermark job directly
-        await supabase.from('processing_queue').insert([{
-          upload_id: upload.id,
-          job_type:  'watermark',
-          status:    'pending',
-        }])
+        console.log('  Image file — running supplier logo detection then queueing watermark')
+        let supplierLogoRegion = null
+        try {
+          const imgMime = (upload.mime_type || 'image/jpeg').startsWith('image/') ? upload.mime_type : 'image/jpeg'
+          const imgData = buffer.toString('base64')
+          const logoResp = await anthropic.messages.create({
+            model: 'claude-haiku-4-5',
+            max_tokens: 120,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'image', source: { type: 'base64', media_type: imgMime, data: imgData } },
+                { type: 'text', text: `Identify any MANUFACTURER or SUPPLIER branding logo on this amusement machine image (sticker, badge, panel — not the game title). Ignore "Aryan Amusements". If found reply ONLY: {"found":true,"x_pct":X,"y_pct":Y,"w_pct":W,"h_pct":H,"confidence":0.0} else {"found":false}` },
+              ],
+            }],
+          })
+          const txt = logoResp.content[0]?.text?.trim().replace(/```json|```/g, '')
+          const parsed = JSON.parse(txt)
+          if (parsed.found && (parsed.confidence ?? 1) >= 0.55) {
+            supplierLogoRegion = { x_pct: parsed.x_pct, y_pct: parsed.y_pct, w_pct: parsed.w_pct, h_pct: parsed.h_pct, confidence: parsed.confidence ?? 0.8 }
+            console.log(`  Supplier logo detected in image: ${JSON.stringify(supplierLogoRegion)}`)
+          }
+        } catch { console.warn('  Image logo detection failed (non-fatal)') }
+
+        if (supplierLogoRegion) {
+          await supabase.from('uploads').update({ supplier_logo_region: supplierLogoRegion }).eq('id', upload.id).catch(() => {})
+        }
+        await supabase.from('processing_queue').insert([{ upload_id: upload.id, job_type: 'watermark', status: 'pending' }])
         await completeJob(jobId)
         return
       }
@@ -313,11 +339,46 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
         }
       }
 
+      // ── Supplier logo detection ────────────────────────────
+      let supplierLogoRegion = null
+      if (frames.length > 0) {
+        try {
+          const logoResp = await anthropic.messages.create({
+            model: 'claude-haiku-4-5',
+            max_tokens: 120,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: readFileSync(frames[0]).toString('base64') } },
+                { type: 'text', text: `This is a frame from an amusement equipment video.
+Identify any MANUFACTURER or SUPPLIER branding logo on the machine (sticker, badge, panel text — not the game title).
+Ignore "Aryan Amusements" — that is our brand.
+If you see supplier branding, reply ONLY with JSON (no markdown):
+{"found":true,"x_pct":X,"y_pct":Y,"w_pct":W,"h_pct":H,"confidence":0.0}
+(x_pct/y_pct = top-left corner as % of frame, w_pct/h_pct = size as %)
+If no supplier branding visible: {"found":false}` },
+              ],
+            }],
+          })
+          const txt = logoResp.content[0]?.text?.trim().replace(/```json|```/g, '')
+          const parsed = JSON.parse(txt)
+          if (parsed.found && (parsed.confidence ?? 1) >= 0.55) {
+            supplierLogoRegion = { x_pct: parsed.x_pct, y_pct: parsed.y_pct, w_pct: parsed.w_pct, h_pct: parsed.h_pct, confidence: parsed.confidence ?? 0.8 }
+            console.log(`  Supplier logo detected: ${JSON.stringify(supplierLogoRegion)}`)
+          } else {
+            console.log('  No supplier logo detected')
+          }
+        } catch (logoErr) {
+          console.warn('  Supplier logo detection failed (non-fatal):', logoErr.message)
+        }
+      }
+
       await supabase.from('uploads').update({
-        ai_main_category_id: matched?.id || null,
-        main_category_id:    upload.main_category_id || matched?.id || null,
-        ai_confidence:       matched ? 0.9 : 0.3,
-        ai_game_name:        aiGameName,
+        ai_main_category_id:  matched?.id || null,
+        main_category_id:     upload.main_category_id || matched?.id || null,
+        ai_confidence:        matched ? 0.9 : 0.3,
+        ai_game_name:         aiGameName,
+        supplier_logo_region: supplierLogoRegion,
       }).eq('id', upload.id)
 
       // Queue the watermark job regardless of whether AI categorization succeeded
@@ -361,20 +422,24 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       const hasLogo = existsSync(LOGO_PATH)
       console.log(`  Logo file: ${hasLogo ? 'found' : 'NOT FOUND — text-only fallback'}`)
 
-      // Detect actual pixel dimensions so the watermark scales correctly
-      let vidW = 1920
+      // Detect actual pixel dimensions — we need BOTH width AND height.
+      // bandH is derived from vidH so the watermark occupies a consistent
+      // fraction of the total frame height regardless of resolution.
+      let vidW = 1920, vidH = 1080
       try {
         const { stdout: dimOut } = await execAsync(
           `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${tmpInput}"`
         )
         const parts = dimOut.trim().split(',').map(Number)
-        if (parts[0] > 0) vidW = parts[0]
-        console.log(`  Dimensions: ${parts[0]}x${parts[1]}`)
-      } catch { console.warn('  Could not detect dimensions — defaulting to 1920px wide') }
+        if (parts.length >= 2 && parts[0] > 0 && parts[1] > 0) {
+          vidW = parts[0]; vidH = parts[1]
+        }
+        console.log(`  Dimensions: ${vidW}x${vidH}`)
+      } catch { console.warn(`  ffprobe failed — using defaults ${vidW}x${vidH}`) }
 
-      // All sizes scale proportionally with video width
+      // All watermark sizes computed from vidH (frame height = visual reference)
       const { bandH, logoSz, logoPad, logoBoxW, textW, textX,
-              phoneFs, nameFs, srcH, srcW, srcFs, phY, nmY } = calcWM(vidW)
+              phoneFs, nameFs, srcH, srcW, srcFs, phY, nmY } = calcWM(vidW, vidH)
 
       console.log(`  Watermark band: ${bandH}px tall, logo: ${logoSz}px, phone: ${phoneFs}pt, name: ${nameFs}pt`)
 
@@ -383,7 +448,29 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       const escapedPhone = WM.phone.replace(/'/g, "\\'" ).replace(/:/g, '\\:')
       const escapedCode  = supplierCode.replace(/'/g, "\\'" ).replace(/:/g, '\\:')
 
+      // ── Supplier logo camouflage ───────────────────────────
+      // Read detected region from categorize step (if any)
+      const supplierRegion = upload.supplier_logo_region
+      let supplierCoverFilters = []
+      let supplierCoverOverlay = null  // pixel coords for logo overlay on cover
+
+      if (supplierRegion?.confidence >= 0.55) {
+        const sx  = Math.round(vidW * supplierRegion.x_pct / 100)
+        const sy  = Math.round(vidH * supplierRegion.y_pct / 100)
+        const sw  = Math.round(vidW * supplierRegion.w_pct / 100)
+        const sh  = Math.round(vidH * supplierRegion.h_pct / 100)
+        const pad = Math.round(Math.max(sw, sh) * 0.10)
+        const cx  = Math.max(0, sx - pad)
+        const cy  = Math.max(0, sy - pad)
+        const cw  = Math.min(vidW - cx, sw + 2 * pad)
+        const ch  = Math.min(vidH - cy, sh + 2 * pad)
+        supplierCoverFilters = [`drawbox=x=${cx}:y=${cy}:w=${cw}:h=${ch}:color=black@0.95:t=fill`]
+        supplierCoverOverlay = { x: cx, y: cy, w: cw, h: ch }
+        console.log(`  Covering supplier logo: ${cx},${cy} → ${cw}×${ch}px (confidence ${supplierRegion.confidence})`)
+      }
+
       const videoFilters = [
+        ...supplierCoverFilters,   // black box over supplier logo (comes first)
         `drawbox=x=0:y=0:w=${logoBoxW}:h=${bandH}:color=black@0.75:t=fill`,
         `drawbox=x=${logoBoxW}:y=0:w=${textW}:h=${bandH}:color=black@0.75:t=fill`,
         `drawbox=x=iw-${srcW}:y=ih-${srcH}:w=${srcW}:h=${srcH}:color=black@0.75:t=fill`,
@@ -398,20 +485,19 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       const salesExt  = isImage ? '.jpg' : '.mp4'
       const tmpOutput = join(TMP, `output_${jobId}${salesExt}`)
       const logoInput = hasLogo ? `-i "${LOGO_PATH}"` : ''
+      const fmtEnd    = isImage ? ',format=yuvj420p' : ''
 
-      // Image filter: DO NOT use format=rgb24 — it causes a pixel-format
-      // mismatch with the JPEG encoder. Instead let FFmpeg stay in the native
-      // JPEG colour space (yuvj420p) and convert ONLY at the very end so the
-      // mjpeg encoder always receives a compatible format.
-      //
-      // Video filter: no explicit format — libx264 handles conversion itself.
-      const filterComplex = isImage
-        ? (hasLogo
-            ? `[0:v]${videoFilters}[vid];[1:v]scale=${logoSz}:${logoSz}[logo];[vid][logo]overlay=${logoPad}:${logoPad},format=yuvj420p[out]`
-            : `[0:v]${videoFilters},format=yuvj420p[out]`)
-        : (hasLogo
-            ? `[0:v]${videoFilters}[vid];[1:v]scale=${logoSz}:${logoSz}[logo];[vid][logo]overlay=${logoPad}:${logoPad}[out]`
-            : `[0:v]${videoFilters}[out]`)
+      // Build filter_complex:
+      // - If supplier logo found: split logo input → brand (top-left) + cover (supplier area)
+      // - Otherwise: standard single logo overlay
+      let filterComplex
+      if (hasLogo && supplierCoverOverlay) {
+        filterComplex = `[1:v]split=2[la][lb];[la]scale=${logoSz}:${logoSz}[brand];[lb]scale=${supplierCoverOverlay.w}:${supplierCoverOverlay.h}[cover];[0:v]${videoFilters}[vid];[vid][brand]overlay=${logoPad}:${logoPad}[mid];[mid][cover]overlay=${supplierCoverOverlay.x}:${supplierCoverOverlay.y}${fmtEnd}[out]`
+      } else if (hasLogo) {
+        filterComplex = `[0:v]${videoFilters}[vid];[1:v]scale=${logoSz}:${logoSz}[logo];[vid][logo]overlay=${logoPad}:${logoPad}${fmtEnd}[out]`
+      } else {
+        filterComplex = `[0:v]${videoFilters}${fmtEnd}[out]`
+      }
 
       const ffCmd = isImage
         ? `ffmpeg -i "${tmpInput}" ${logoInput} -filter_complex "${filterComplex}" -map "[out]" -q:v 2 -frames:v 1 "${tmpOutput}" -y`
