@@ -3,9 +3,17 @@ import { supabase } from './supabase.js'
 
 const SUPABASE_URL    = import.meta.env.VITE_SUPABASE_URL
 const TUS_ENDPOINT    = `${SUPABASE_URL}/storage/v1/upload/resumable`
-const CHUNK_SIZE      = 6 * 1024 * 1024
-const MAX_CONCURRENT  = 3
-const RETRY_DELAYS    = [0, 3000, 8000, 15000]
+
+// Small chunks = less data lost per retry = faster recovery on slow/unstable connections.
+// 512 KB is the sweet spot for China connections (was 6 MB — far too large).
+const CHUNK_SIZE      = 512 * 1024
+
+// 2 concurrent uploads — enough throughput without saturating limited bandwidth.
+const MAX_CONCURRENT  = 2
+
+// 7 retries with short initial delay — recovers quickly from the brief interruptions
+// common on GFW-routed connections.
+const RETRY_DELAYS    = [0, 1000, 2000, 4000, 8000, 16000, 30000]
 
 const active = new Map()
 
@@ -125,11 +133,15 @@ function _startTus({ uploadId, file, storagePath, accessToken, dbId, bucketName 
     onError(err) {
       active.delete(uploadId)
       running--
-      emit({ type: 'ERROR', uploadId, error: err.message || String(err) })
-      // Mark as failed in DB
+      const msg = err.message || String(err)
+      // Give a friendlier message for the common China connection drop error
+      const friendly = msg.includes('unexpected response')
+        ? 'Connection interrupted — please try uploading again. The file will resume where it left off.'
+        : msg
+      emit({ type: 'ERROR', uploadId, error: friendly })
       if (dbId) {
         supabase.from('uploads')
-          .update({ upload_status: 'failed', error_message: err.message || String(err) })
+          .update({ upload_status: 'failed', error_message: msg })
           .eq('id', dbId)
           .then(() => {})
       }
