@@ -148,10 +148,24 @@ export default function UploadsTab() {
 
   async function deleteUpload(upload) {
     if (!window.confirm(t('admin.confirmDelete'))) return
-    await supabase.storage.from('uploads').remove([upload.storage_path])
-    if (upload.sales_path) await supabase.storage.from('sales').remove([upload.sales_path])
-    await supabase.from('uploads').delete().eq('id', upload.id)
-    setUploads(prev => prev.filter(u => u.id !== upload.id))
+    try {
+      // 1. Delete processing_queue rows first — they have a FK → uploads
+      await supabase.from('processing_queue').delete().eq('upload_id', upload.id)
+
+      // 2. Delete the uploads record
+      const { error: dbErr } = await supabase.from('uploads').delete().eq('id', upload.id)
+      if (dbErr) throw new Error(`DB delete failed: ${dbErr.message}`)
+
+      // 3. Delete files from storage (best-effort — don't block on storage errors)
+      if (upload.storage_path)
+        await supabase.storage.from('uploads').remove([upload.storage_path]).catch(() => {})
+      if (upload.sales_path)
+        await supabase.storage.from('sales').remove([upload.sales_path]).catch(() => {})
+
+      setUploads(prev => prev.filter(u => u.id !== upload.id))
+    } catch (err) {
+      alert(`Could not delete: ${err.message}\n\nIf this keeps happening, run this SQL in Supabase:\nCREATE POLICY "uploads_admin_delete" ON uploads FOR DELETE USING (EXISTS (SELECT 1 FROM admins WHERE id = auth.uid()));`)
+    }
   }
 
   const typeIcon = t => t === 'video' ? '🎬' : t === 'image' ? '🖼️' : '📄'

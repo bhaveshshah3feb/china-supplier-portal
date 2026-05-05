@@ -44,17 +44,18 @@ const WM = {
   phone: '+91 9841081945',
 }
 
-// Compute watermark dimensions proportional to video/image width so the
-// overlay looks consistent at every resolution (720p, 1080p, 4K, etc.)
+// Compute watermark dimensions proportional to video/image width.
+// No upper cap — a 4K or iPhone image gets a 4K-sized watermark.
+// Rule of thumb: band = 7.5% of width, minimum 80px.
 function calcWM(vidW) {
-  const bandH   = Math.max(80, Math.min(220, Math.round(vidW * 0.075)))
+  const bandH   = Math.max(80, Math.round(vidW * 0.075))  // no cap
   const logoSz  = Math.round(bandH * 0.80)
   const logoPad = Math.round(bandH * 0.10)
   const logoBoxW = logoSz + 2 * logoPad
-  const textW   = Math.round(vidW * 0.22)
+  const textW   = Math.round(vidW * 0.25)   // 25% of width (was 22%, needed for long name)
   const textX   = logoBoxW + logoPad
   const phoneFs = Math.round(bandH * 0.28)
-  const nameFs  = Math.round(bandH * 0.20)
+  const nameFs  = Math.round(bandH * 0.17)  // 17% of band (was 20% — overflowed on wide images)
   const srcH    = Math.round(bandH * 0.40)
   const srcW    = Math.round(vidW * 0.16)
   const srcFs   = Math.round(srcH  * 0.38)
@@ -63,6 +64,11 @@ function calcWM(vidW) {
   return { bandH, logoSz, logoPad, logoBoxW, textW, textX,
            phoneFs, nameFs, srcH, srcW, srcFs, phY, nmY }
 }
+// Quick sanity table (approximate):
+// 720p  (1280px): band=96px,  logo=77px,  phone=27pt, name=16pt
+// 1080p (1920px): band=144px, logo=115px, phone=40pt, name=24pt
+// 4K    (3840px): band=288px, logo=230px, phone=81pt, name=49pt
+// iPhone(4032px): band=302px, logo=242px, phone=85pt, name=51pt
 
 // ── Auto-heal: queue uploads that never got a processing job ─
 async function autoQueueOrphans() {
