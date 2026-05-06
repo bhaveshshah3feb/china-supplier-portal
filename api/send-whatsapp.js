@@ -183,7 +183,7 @@ export default async function handler(req, res) {
         messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
         type: 'template',
         template: {
-          name: templateName, language: { code: 'en_US' },
+          name: templateName, language: { code: 'en' },
           components: [
             { type: 'header', parameters: [videoParam] },
             { type: 'body',   parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
@@ -209,7 +209,7 @@ export default async function handler(req, res) {
         messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
         type: 'template',
         template: {
-          name: templateName, language: { code: 'en_US' },
+          name: templateName, language: { code: 'en' },
           components: [
             { type: 'header', parameters: [imageParam] },
             { type: 'body',   parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
