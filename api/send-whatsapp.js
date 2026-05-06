@@ -169,25 +169,14 @@ export default async function handler(req, res) {
     if (file_type === 'video') {
       templateName = 'game_vidpic'
       msgContent   = `Here's the video for ${name1} — ${name2}`
-
-      // Upload to WhatsApp first to avoid "received UNKNOWN" error on URL fetch
-      let videoParam
-      try {
-        const mediaId = await uploadMediaToWhatsApp(file_url, phoneNumberId, accessToken)
-        videoParam = { type: 'video', video: { id: mediaId } }
-      } catch (uploadErr) {
-        console.warn('Video upload to WA failed, falling back to link:', uploadErr.message)
-        videoParam = { type: 'video', video: { link: file_url } }
-      }
-
+      // Template is text-only (no video header) — body params only
       payload = {
         messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
         type: 'template',
         template: {
           name: templateName, language: { code: 'en' },
           components: [
-            { type: 'header', parameters: [videoParam] },
-            { type: 'body',   parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
+            { type: 'body', parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
           ],
         },
       }
@@ -195,25 +184,14 @@ export default async function handler(req, res) {
     } else if (file_type === 'image') {
       templateName = 'game_pic'
       msgContent   = `Here's the image for ${name1} — ${name2}`
-
-      // Upload to WhatsApp first to avoid "received UNKNOWN" error on URL fetch
-      let imageParam
-      try {
-        const mediaId = await uploadMediaToWhatsApp(file_url, phoneNumberId, accessToken)
-        imageParam = { type: 'image', image: { id: mediaId } }
-      } catch (uploadErr) {
-        console.warn('Image upload to WA failed, falling back to link:', uploadErr.message)
-        imageParam = { type: 'image', image: { link: file_url } }
-      }
-
+      // Template is text-only (no image header) — body params only
       payload = {
         messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
         type: 'template',
         template: {
           name: templateName, language: { code: 'en' },
           components: [
-            { type: 'header', parameters: [imageParam] },
-            { type: 'body',   parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
+            { type: 'body', parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
           ],
         },
       }
