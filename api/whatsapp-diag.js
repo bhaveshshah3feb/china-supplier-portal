@@ -154,53 +154,67 @@ export default async function handler(req, res) {
       })
     }
 
-    // ── Check 4: Send a TEMPLATE message (correct test) ───────
+    // ── Check 4a: Template WITH media header ─────────────────
+    // ── Check 4b: Template WITHOUT header (body-only) ────────
+    // We run BOTH so we can see whether the header is causing the silent drop
     const { to_phone, file_url, file_type } = req.body || {}
-    if (to_phone && file_url) {
-      const cleanPhone = to_phone.replace(/[^\d]/g, '')
-      const lang = results.detectedLang?.[file_type === 'video' ? 'game_vidpic' : 'game_pic'] || 'en_US'
-      const templateName = file_type === 'video' ? 'game_vidpic' : 'game_pic'
+    if (to_phone) {
+      const cleanPhone   = to_phone.replace(/[^\d]/g, '')
+      const lang         = results.detectedLang?.['game_pic'] || 'en'
+      const templateName = 'game_pic'
 
-      const payload = {
-        messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
-        type: 'template',
-        template: {
-          name: templateName, language: { code: lang },
-          components: [
-            { type: 'header', parameters: file_type === 'video'
-              ? [{ type: 'video', video: { link: file_url } }]
-              : [{ type: 'image', image: { link: file_url } }] },
-            { type: 'body', parameters: [{ type: 'text', text: 'Test Game' }, { type: 'text', text: 'Amusement Equipment' }] },
-          ],
-        },
+      const sendTemplate = async (withHeader) => {
+        const components = withHeader && file_url
+          ? [
+              { type: 'header', parameters: [{ type: 'image', image: { link: file_url } }] },
+              { type: 'body',   parameters: [{ type: 'text', text: 'Test Game' }, { type: 'text', text: 'Amusement' }] },
+            ]
+          : [
+              { type: 'body',   parameters: [{ type: 'text', text: 'Test Game' }, { type: 'text', text: 'Amusement' }] },
+            ]
+
+        const payload = {
+          messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
+          type: 'template',
+          template: { name: templateName, language: { code: lang }, components },
+        }
+        const r = await fetch(`${WA_API}/${phoneNumberId}/messages`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        const d = await r.json()
+        return { msgId: d.messages?.[0]?.id, raw: d, payload }
       }
 
-      const msgRes  = await fetch(`${WA_API}/${phoneNumberId}/messages`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      const msgData = await msgRes.json()
-      const msgId   = msgData.messages?.[0]?.id
+      // 4a — with image header (only if URL provided)
+      if (file_url) {
+        const { msgId, raw, payload } = await sendTemplate(true)
+        results.checks.push({
+          name:    `4a. Template WITH image header (${templateName}, lang:${lang})`,
+          ok:      !!msgId,
+          detail:  msgId
+            ? `Accepted (ID: ${msgId}). Did you RECEIVE this message on your phone?`
+            : `✗ Error ${raw.error?.code}: ${raw.error?.message}`,
+          raw, payload,
+          fix: raw.error?.code === 132001 ? 'Template does NOT have an image header — run 4b (text-only) instead.'
+            :  raw.error?.code === 132000 ? 'Template name or language mismatch.'
+            :  null,
+        })
+      }
 
+      // 4b — body only (no header) — works even if template has no header
+      const { msgId: msgId2, raw: raw2, payload: payload2 } = await sendTemplate(false)
       results.checks.push({
-        name:      `4. Template Send Test (${templateName}, lang: ${lang})`,
-        ok:        !!msgId,
-        detail:    msgId
-          ? `✓ Message ID: ${msgId} — accepted by WhatsApp. You should receive it within seconds.`
-          : `✗ Error ${msgData.error?.code}: ${msgData.error?.message}`,
-        raw:       msgData,
-        payload:   payload,
-        fix:       msgData.error?.code === 132000 ? 'Template not found or language mismatch.'
-          : msgData.error?.code === 132001 ? 'Template parameter count mismatch — header or body params wrong.'
-          : msgData.error?.code === 131047 ? 'Message blocked — 24h window (use a template, not free-form).'
-          : null,
-      })
-    } else if (to_phone) {
-      results.checks.push({
-        name:   '4. Template Send Test',
-        ok:     null,
-        detail: 'Provide a file_url and file_type to test template sending. Enter a Sales Library image URL above.',
+        name:    `4b. Template WITHOUT header — body only (${templateName}, lang:${lang})`,
+        ok:      !!msgId2,
+        detail:  msgId2
+          ? `Accepted (ID: ${msgId2}). If you receive THIS but NOT 4a, the template has no image header and we need to fix the code.`
+          : `✗ Error ${raw2.error?.code}: ${raw2.error?.message}`,
+        raw: raw2, payload: payload2,
+        fix: raw2.error?.code === 132001 ? 'Body parameter count mismatch — check template variables.'
+          :  raw2.error?.code === 131026 ? 'Phone not on WhatsApp.'
+          :  null,
       })
     }
 
