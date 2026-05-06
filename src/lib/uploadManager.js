@@ -57,6 +57,29 @@ export function detectFileType(file) {
 let queue   = []
 let running = 0
 
+// Auto-trigger GitHub Actions processing after a batch of uploads finishes.
+// Debounced 15 s so a batch of 10 files only fires one trigger, not ten.
+let _autoTriggerTimer = null
+function scheduleAutoTrigger() {
+  clearTimeout(_autoTriggerTimer)
+  _autoTriggerTimer = setTimeout(async () => {
+    if (running > 0 || queue.length > 0) return  // more uploads still in flight
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
+      const res  = await fetch('/api/notify-upload-complete', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      })
+      const body = await res.json()
+      if (body.ok)      console.log(`Processing auto-triggered (${body.pending_jobs} pending jobs)`)
+      else if (!body.skipped) console.warn('Auto-trigger skipped:', body.reason)
+    } catch (err) {
+      console.warn('Auto-trigger processing failed:', err.message)
+    }
+  }, 15000)
+}
+
 function tryDequeue() {
   while (running < MAX_CONCURRENT && queue.length > 0) {
     const item = queue.shift()
@@ -123,6 +146,7 @@ async function _startDirect(item) {
       emit({ type: 'PROGRESS', uploadId, pct: 100, bytesUploaded: file.size, bytesTotal: file.size, speed, eta: '0s' })
       emit({ type: 'COMPLETE', uploadId, storagePath })
       tryDequeue()
+      scheduleAutoTrigger()
 
       if (dbId) {
         try {
@@ -185,6 +209,7 @@ function _startTus({ uploadId, file, storagePath, accessToken, dbId, bucketName 
       running--
       emit({ type: 'COMPLETE', uploadId, storagePath })
       tryDequeue()
+      scheduleAutoTrigger()
 
       // ── Mark upload completed in DB and create processing job ──
       if (dbId) {

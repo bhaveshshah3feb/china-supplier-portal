@@ -54,6 +54,13 @@ const WA_KEYS = [
     help:        'Meta Business Suite → Business Settings → Business Info',
     type:        'text',
   },
+  {
+    key:         'whatsapp_verify_token',
+    label:       'Webhook Verify Token',
+    placeholder: 'my-secret-verify-token-123',
+    help:        'Any secret string — paste this into Meta Developer Portal → WhatsApp → Configuration → Webhooks → Verify Token',
+    type:        'text',
+  },
 ]
 
 const GITHUB_KEYS = [

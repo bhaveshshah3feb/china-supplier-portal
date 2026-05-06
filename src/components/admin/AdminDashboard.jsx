@@ -10,10 +10,12 @@ import LogsTab         from './tabs/LogsTab'
 import SalesLibraryTab from './tabs/SalesLibraryTab'
 import SettingsTab     from './tabs/SettingsTab'
 import RenameTab      from './tabs/RenameTab'
+import WhatsAppTab    from './tabs/WhatsAppTab'
 
 const TABS = [
   { key: 'overview',     icon: '📊', label: 'Overview' },
   { key: 'library',      icon: '✅', label: 'Sales Library' },
+  { key: 'whatsapp',     icon: '💬', label: 'WhatsApp' },
   { key: 'rename',       icon: '✏️',  label: 'Rename / Edit' },
   { key: 'suppliers',    icon: '🏭', label: 'Suppliers' },
   { key: 'uploads',      icon: '📁', label: 'Uploads' },
@@ -264,6 +266,7 @@ export default function AdminDashboard() {
         )}
 
         {tab === 'library'    && <SalesLibraryTab />}
+        {tab === 'whatsapp'   && <WhatsAppTab />}
         {tab === 'rename'     && <RenameTab />}
         {tab === 'suppliers'  && <SuppliersTab />}
         {tab === 'uploads'    && <UploadsTab />}
