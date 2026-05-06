@@ -282,6 +282,8 @@ function InboxPanel() {
 // ── Test & Debug Panel ────────────────────────────────────────
 function TestPanel() {
   const [diagPhone, setDiagPhone]   = useState('')
+  const [diagFileUrl, setDiagFileUrl] = useState('')
+  const [diagFileType, setDiagFileType] = useState('image')
   const [diagResult, setDiagResult] = useState(null)
   const [diagRunning, setDiagRunning] = useState(false)
   const [testPhone, setTestPhone]   = useState('')
@@ -310,7 +312,11 @@ function TestPanel() {
       const res = await fetch('/api/whatsapp-diag', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ to_phone: diagPhone.trim() || undefined }),
+        body: JSON.stringify({
+          to_phone:  diagPhone.trim() || undefined,
+          file_url:  diagFileUrl.trim() || undefined,
+          file_type: diagFileUrl.trim() ? diagFileType : undefined,
+        }),
       })
       const body = await res.json()
       setDiagResult(body)
@@ -393,16 +399,34 @@ curl_close($ch);
           Checks credentials, verifies them live against Meta API, and optionally sends a test message
           — showing the exact raw response so we can see what WhatsApp is actually saying.
         </p>
-        <div className="flex gap-3 items-end flex-wrap">
-          <div className="flex-1 min-w-48">
-            <label className="text-xs font-medium text-gray-600 block mb-1">Phone to test-send to (optional)</label>
-            <input value={diagPhone} onChange={e => setDiagPhone(e.target.value)}
-              placeholder="919841081945"
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">Your phone (to receive test)</label>
+              <input value={diagPhone} onChange={e => setDiagPhone(e.target.value)}
+                placeholder="919841081945"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-green-500 outline-none" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">File type</label>
+              <select value={diagFileType} onChange={e => setDiagFileType(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none">
+                <option value="image">Image (game_pic template)</option>
+                <option value="video">Video (game_vidpic template)</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">
+              Public file URL to test template with (paste any image from Sales Library)
+            </label>
+            <input value={diagFileUrl} onChange={e => setDiagFileUrl(e.target.value)}
+              placeholder="https://… (right-click an image in Sales Library → copy image address)"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-green-500 outline-none" />
           </div>
           <button onClick={runDiagnostics} disabled={diagRunning}
-            className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50 shrink-0">
-            {diagRunning ? 'Running…' : 'Run Diagnostics'}
+            className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50">
+            {diagRunning ? 'Running diagnostics…' : 'Run Diagnostics'}
           </button>
         </div>
 
@@ -423,6 +447,11 @@ curl_close($ch);
                   <div className="flex-1 space-y-1">
                     <p className="font-semibold text-gray-800">{c.name}</p>
                     <p className="text-gray-600">{c.detail}</p>
+                    {c.langWarning && (
+                      <p className="text-red-700 bg-red-50 px-2 py-1 rounded mt-1 font-semibold">
+                        ⚠ {c.langWarning}
+                      </p>
+                    )}
                     {c.fix && (
                       <p className="text-blue-700 bg-blue-50 px-2 py-1 rounded mt-1">
                         Fix: {c.fix}

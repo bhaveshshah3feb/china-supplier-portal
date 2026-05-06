@@ -28,7 +28,6 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Admin access required' })
     }
 
-    // Load credentials
     const { data: rows } = await supabaseAdmin
       .from('settings').select('key, value')
       .in('key', ['whatsapp_phone_number_id', 'whatsapp_access_token', 'whatsapp_business_account_id'])
@@ -39,121 +38,170 @@ export default async function handler(req, res) {
     const accessToken   = cfg.whatsapp_access_token   || ''
     const wabaId        = cfg.whatsapp_business_account_id || ''
 
-    const results = { phoneNumberId, wabaId: wabaId || '(not set)', checks: [] }
+    const results = { checks: [] }
 
-    // ── 1. Check credentials are present ──────────────────────
+    // ── Check 1: Credentials present ─────────────────────────
     results.checks.push({
-      name:   'Credentials in Settings',
+      name:   '1. Credentials in Settings',
       ok:     !!(phoneNumberId && accessToken),
       detail: phoneNumberId
-        ? `Phone Number ID: ${phoneNumberId} · Token: ${accessToken ? '***' + accessToken.slice(-6) : 'MISSING'}`
-        : 'Phone Number ID is missing — check Settings → WhatsApp',
+        ? `Phone Number ID: ${phoneNumberId} · Token ends: ...${accessToken.slice(-8)}`
+        : 'Phone Number ID is MISSING — go to Settings → WhatsApp.',
     })
+    if (!phoneNumberId || !accessToken) return res.status(200).json(results)
 
-    if (!phoneNumberId || !accessToken) {
-      return res.status(200).json(results)
-    }
-
-    // ── 2. Verify token + Phone Number ID via Meta GET ─────────
+    // ── Check 2: Verify phone number ID + token via Meta ──────
     const phoneRes  = await fetch(
-      `${WA_API}/${phoneNumberId}?fields=display_phone_number,quality_rating,verified_name,code_verification_status,platform_type`,
+      `${WA_API}/${phoneNumberId}?fields=display_phone_number,quality_rating,verified_name,code_verification_status`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     )
     const phoneData = await phoneRes.json()
 
     if (phoneData.error) {
       results.checks.push({
-        name:   'Token & Phone Number ID',
+        name:   '2. Token & Phone Number ID (Live Meta Check)',
         ok:     false,
         detail: `Error ${phoneData.error.code}: ${phoneData.error.message}`,
         raw:    phoneData.error,
         fix:    phoneData.error.code === 190
-          ? 'Token expired. Go to Meta Business Suite → System Users → regenerate the token and update it in Settings.'
-          : phoneData.error.code === 100
-          ? 'Phone Number ID is wrong. Find the correct ID in Meta Developer Portal → WhatsApp → API Setup.'
-          : 'Check your credentials in Settings → WhatsApp.',
+          ? 'Token EXPIRED. Go to Meta Business Suite → System Users → regenerate and update in Settings.'
+          : 'Phone Number ID is wrong. Find correct ID in Meta Developer Portal → WhatsApp → API Setup.',
       })
-    } else {
-      results.checks.push({
-        name:   'Token & Phone Number ID',
-        ok:     true,
-        detail: `Display number: ${phoneData.display_phone_number} · Name: ${phoneData.verified_name} · Quality: ${phoneData.quality_rating} · Status: ${phoneData.code_verification_status}`,
-        phoneDetails: phoneData,
-      })
+      return res.status(200).json(results)
     }
 
-    // ── 3. Check WABA if provided ──────────────────────────────
+    results.checks.push({
+      name:   '2. Token & Phone Number ID (Live Meta Check)',
+      ok:     true,
+      detail: `Display number: ${phoneData.display_phone_number} · Verified name: ${phoneData.verified_name} · Quality: ${phoneData.quality_rating}`,
+    })
+
+    // ── Check 3: Template status for game_pic + game_vidpic ───
     if (wabaId) {
-      const wabaRes  = await fetch(
-        `${WA_API}/${wabaId}?fields=name,currency,account_review_status,on_behalf_of_business_info`,
+      const tmplRes  = await fetch(
+        `${WA_API}/${wabaId}/message_templates?fields=name,status,language,components&limit=100`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       )
-      const wabaData = await wabaRes.json()
+      const tmplData = await tmplRes.json()
 
-      if (wabaData.error) {
+      if (tmplData.error) {
         results.checks.push({
-          name:   'WhatsApp Business Account',
+          name:   '3. Template Status Check',
           ok:     false,
-          detail: `Error ${wabaData.error.code}: ${wabaData.error.message}`,
+          detail: `Could not fetch templates: ${tmplData.error.message}`,
+          fix:    'Verify the Business Account ID in Settings → WhatsApp.',
         })
       } else {
+        const templates  = tmplData.data || []
+        const gamePic    = templates.find(t => t.name === 'game_pic')
+        const gameVidpic = templates.find(t => t.name === 'game_vidpic')
+
+        const describeTemplate = (t, name) => {
+          if (!t) return `"${name}" — NOT FOUND in this WABA. Check the template name is exactly correct (case-sensitive).`
+          const header = t.components?.find(c => c.type === 'HEADER')
+          const body   = t.components?.find(c => c.type === 'BODY')
+          return `"${name}" — Status: ${t.status} · Language: ${t.language} · Header: ${header?.format || 'none'} · Body: "${body?.text?.slice(0, 60)}..."`
+        }
+
+        const picOk    = gamePic    && gamePic.status    === 'APPROVED'
+        const vidpicOk = gameVidpic && gameVidpic.status === 'APPROVED'
+
         results.checks.push({
-          name:   'WhatsApp Business Account',
-          ok:     true,
-          detail: `Name: ${wabaData.name} · Review status: ${wabaData.account_review_status || 'not shown'}`,
-          wabaDetails: wabaData,
+          name:   '3. Template Status (game_pic)',
+          ok:     !!picOk,
+          detail: describeTemplate(gamePic, 'game_pic'),
+          raw:    gamePic,
+          fix:    !gamePic
+            ? 'Template not found — name mismatch. Check Meta Business Manager → Message Templates for exact name.'
+            : gamePic.status !== 'APPROVED'
+            ? `Template status is "${gamePic.status}" — must be APPROVED before it can be used.`
+            : null,
+          langWarning: gamePic && gamePic.language !== 'en'
+            ? `Template language is "${gamePic.language}" but our code sends "en" — THIS IS LIKELY THE BUG. Will fix automatically.`
+            : null,
         })
+
+        results.checks.push({
+          name:   '3. Template Status (game_vidpic)',
+          ok:     !!vidpicOk,
+          detail: describeTemplate(gameVidpic, 'game_vidpic'),
+          raw:    gameVidpic,
+          fix:    !gameVidpic
+            ? 'Template not found — name mismatch. Check Meta Business Manager → Message Templates for exact name.'
+            : gameVidpic.status !== 'APPROVED'
+            ? `Template status is "${gameVidpic.status}" — must be APPROVED before it can be used.`
+            : null,
+          langWarning: gameVidpic && gameVidpic.language !== 'en'
+            ? `Template language is "${gameVidpic.language}" but our code sends "en" — THIS IS LIKELY THE BUG. Will fix automatically.`
+            : null,
+        })
+
+        // Store detected language codes for caller to use
+        results.detectedLang = {
+          game_pic:    gamePic?.language,
+          game_vidpic: gameVidpic?.language,
+        }
+        results.templateComponents = {
+          game_pic:    gamePic?.components,
+          game_vidpic: gameVidpic?.components,
+        }
       }
+    } else {
+      results.checks.push({
+        name:   '3. Template Status Check',
+        ok:     null,
+        detail: 'Business Account ID not set — cannot check template status. Add it in Settings → WhatsApp → Business Account ID.',
+      })
     }
 
-    // ── 4. Send a real test message and capture full response ──
-    const { to_phone } = req.body || {}
-    if (to_phone) {
+    // ── Check 4: Send a TEMPLATE message (correct test) ───────
+    const { to_phone, file_url, file_type } = req.body || {}
+    if (to_phone && file_url) {
       const cleanPhone = to_phone.replace(/[^\d]/g, '')
-      const testPayload = {
-        messaging_product: 'whatsapp',
-        recipient_type:    'individual',
-        to:                cleanPhone,
-        type:              'text',
-        text:              { preview_url: false, body: 'Diagnostic test from Aryan Amusements portal. If you receive this, WhatsApp is working.' },
+      const lang = results.detectedLang?.[file_type === 'video' ? 'game_vidpic' : 'game_pic'] || 'en'
+      const templateName = file_type === 'video' ? 'game_vidpic' : 'game_pic'
+
+      const payload = {
+        messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
+        type: 'template',
+        template: {
+          name: templateName, language: { code: lang },
+          components: [
+            { type: 'header', parameters: file_type === 'video'
+              ? [{ type: 'video', video: { link: file_url } }]
+              : [{ type: 'image', image: { link: file_url } }] },
+            { type: 'body', parameters: [{ type: 'text', text: 'Test Game' }, { type: 'text', text: 'Amusement Equipment' }] },
+          ],
+        },
       }
 
       const msgRes  = await fetch(`${WA_API}/${phoneNumberId}/messages`, {
-        method:  'POST',
+        method: 'POST',
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-        body:    JSON.stringify(testPayload),
+        body: JSON.stringify(payload),
       })
       const msgData = await msgRes.json()
+      const msgId   = msgData.messages?.[0]?.id
 
       results.checks.push({
-        name:      'Live Message Send Test',
-        ok:        !!(msgData.messages?.[0]?.id),
-        detail:    msgData.messages?.[0]?.id
-          ? `Message ID: ${msgData.messages[0].id} — accepted by WhatsApp.`
-          : `Failed: ${msgData.error?.message || 'Unknown error'}`,
+        name:      `4. Template Send Test (${templateName}, lang: ${lang})`,
+        ok:        !!msgId,
+        detail:    msgId
+          ? `✓ Message ID: ${msgId} — accepted by WhatsApp. You should receive it within seconds.`
+          : `✗ Error ${msgData.error?.code}: ${msgData.error?.message}`,
         raw:       msgData,
-        httpStatus: msgRes.status,
-        fix:       msgData.error?.code === 131047
-          ? 'Message blocked — 24h window closed. The recipient must message your business number first.'
-          : msgData.error?.code === 131026
-          ? 'Phone not on WhatsApp or not reachable.'
-          : msgData.error?.code === 132000
-          ? 'App is in development mode. Add this phone number as a test number in Meta Developer Portal → WhatsApp → API Setup → Recipient phone numbers.'
+        payload:   payload,
+        fix:       msgData.error?.code === 132000 ? 'Template not found or language mismatch.'
+          : msgData.error?.code === 132001 ? 'Template parameter count mismatch — header or body params wrong.'
+          : msgData.error?.code === 131047 ? 'Message blocked — 24h window (use a template, not free-form).'
           : null,
       })
-
-      // Important note about dev mode
-      if (msgData.messages?.[0]?.id) {
-        results.checks.push({
-          name:   'Dev Mode Warning',
-          ok:     null,
-          detail: 'Message was ACCEPTED (got a message ID) but may not have been DELIVERED. ' +
-                  'If you did not receive it, your Meta App is likely in development mode. ' +
-                  'Go to Meta Developer Portal → your App → WhatsApp → API Setup → "To" section → ' +
-                  'add your phone number as a recipient and verify it via OTP. ' +
-                  'Or submit the app for App Review to go live.',
-        })
-      }
+    } else if (to_phone) {
+      results.checks.push({
+        name:   '4. Template Send Test',
+        ok:     null,
+        detail: 'Provide a file_url and file_type to test template sending. Enter a Sales Library image URL above.',
+      })
     }
 
     return res.status(200).json(results)
