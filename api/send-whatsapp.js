@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 
 // WhatsApp Cloud API size limits (bytes)
 const WA_LIMITS = { video: 16 * 1024 * 1024, image: 5 * 1024 * 1024, document: 100 * 1024 * 1024 }
-const WA_API    = 'https://graph.facebook.com/v21.0'
+const WA_API    = 'https://graph.facebook.com/v19.0'
 
 function makeAdmin() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL

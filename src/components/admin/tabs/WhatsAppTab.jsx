@@ -281,8 +281,9 @@ function InboxPanel() {
 
 // ── Test & Debug Panel ────────────────────────────────────────
 function TestPanel() {
-  const [credStatus, setCredStatus] = useState(null) // null | 'ok' | 'err' | {error}
-  const [checking, setChecking]     = useState(false)
+  const [diagPhone, setDiagPhone]   = useState('')
+  const [diagResult, setDiagResult] = useState(null)
+  const [diagRunning, setDiagRunning] = useState(false)
   const [testPhone, setTestPhone]   = useState('')
   const [testText, setTestText]     = useState('')
   const [testResult, setTestResult] = useState(null)
@@ -301,22 +302,22 @@ function TestPanel() {
       })
   }, [])
 
-  async function checkCredentials() {
-    setChecking(true)
-    setCredStatus(null)
+  async function runDiagnostics() {
+    setDiagRunning(true)
+    setDiagResult(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
-      const res = await fetch('/api/send-whatsapp', {
+      const res = await fetch('/api/whatsapp-diag', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ test: true }),
+        body: JSON.stringify({ to_phone: diagPhone.trim() || undefined }),
       })
       const body = await res.json()
-      setCredStatus(body.configured ? 'ok' : { error: body.error || 'Not configured' })
+      setDiagResult(body)
     } catch (err) {
-      setCredStatus({ error: err.message })
+      setDiagResult({ error: err.message })
     } finally {
-      setChecking(false)
+      setDiagRunning(false)
     }
   }
 
@@ -385,24 +386,62 @@ curl_close($ch);
   return (
     <div className="space-y-5 max-w-2xl">
 
-      {/* Credential check */}
+      {/* Full diagnostics */}
       <div className="bg-white rounded-2xl border border-gray-200 p-5 space-y-4">
-        <h3 className="font-semibold text-gray-800">1. Check API Credentials</h3>
-        <p className="text-sm text-gray-500">Verifies the Phone Number ID and Access Token saved in Settings are present.</p>
-        <div className="flex items-center gap-3">
-          <button onClick={checkCredentials} disabled={checking}
-            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50">
-            {checking ? 'Checking…' : 'Check Credentials'}
+        <h3 className="font-semibold text-gray-800">1. Run Full Diagnostics</h3>
+        <p className="text-sm text-gray-500">
+          Checks credentials, verifies them live against Meta API, and optionally sends a test message
+          — showing the exact raw response so we can see what WhatsApp is actually saying.
+        </p>
+        <div className="flex gap-3 items-end flex-wrap">
+          <div className="flex-1 min-w-48">
+            <label className="text-xs font-medium text-gray-600 block mb-1">Phone to test-send to (optional)</label>
+            <input value={diagPhone} onChange={e => setDiagPhone(e.target.value)}
+              placeholder="919841081945"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-green-500 outline-none" />
+          </div>
+          <button onClick={runDiagnostics} disabled={diagRunning}
+            className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50 shrink-0">
+            {diagRunning ? 'Running…' : 'Run Diagnostics'}
           </button>
-          {credStatus === 'ok' && (
-            <span className="text-sm text-green-700 bg-green-50 px-3 py-1.5 rounded-lg">✓ Credentials present</span>
-          )}
-          {credStatus && credStatus !== 'ok' && (
-            <span className="text-sm text-red-600 bg-red-50 px-3 py-1.5 rounded-lg">
-              ✗ {credStatus.error}
-            </span>
-          )}
         </div>
+
+        {diagResult && (
+          <div className="space-y-2">
+            {diagResult.error && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">✗ {diagResult.error}</div>
+            )}
+            {(diagResult.checks || []).map((c, i) => (
+              <div key={i} className={`rounded-lg border p-3 text-xs space-y-1
+                ${c.ok === true  ? 'bg-green-50 border-green-200' :
+                  c.ok === false ? 'bg-red-50 border-red-200' :
+                                   'bg-amber-50 border-amber-200'}`}>
+                <div className="flex items-start gap-2">
+                  <span className="shrink-0 font-bold">
+                    {c.ok === true ? '✓' : c.ok === false ? '✗' : '⚠'}
+                  </span>
+                  <div className="flex-1 space-y-1">
+                    <p className="font-semibold text-gray-800">{c.name}</p>
+                    <p className="text-gray-600">{c.detail}</p>
+                    {c.fix && (
+                      <p className="text-blue-700 bg-blue-50 px-2 py-1 rounded mt-1">
+                        Fix: {c.fix}
+                      </p>
+                    )}
+                    {c.raw && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-gray-400">Raw API response</summary>
+                        <pre className="mt-1 bg-gray-900 text-green-300 p-2 rounded text-[10px] overflow-x-auto">
+                          {JSON.stringify(c.raw, null, 2)}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Send test file — direct send, no template (same as original working approach) */}
