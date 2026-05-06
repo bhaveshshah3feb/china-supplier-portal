@@ -294,6 +294,9 @@ function TestPanel() {
   const [freeMsg, setFreeMsg]         = useState('Hi, this is a test message from Aryan Amusements.')
   const [freeResult, setFreeResult]   = useState(null)
   const [freeSending, setFreeSending] = useState(false)
+  const [minPhone, setMinPhone]       = useState('')
+  const [minResult, setMinResult]     = useState(null)
+  const [minRunning, setMinRunning]   = useState(false)
   const [forwardUrl, setForwardUrl]     = useState('')
   const [forwardSecret, setForwardSecret] = useState('')
 
@@ -364,6 +367,24 @@ function TestPanel() {
     }
   }
 
+  async function runMinimalTest() {
+    setMinRunning(true)
+    setMinResult(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/wa-minimal-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ to: minPhone.trim() || undefined }),
+      })
+      setMinResult(await res.json())
+    } catch (err) {
+      setMinResult({ error: err.message })
+    } finally {
+      setMinRunning(false)
+    }
+  }
+
   async function sendFreeForm() {
     if (!freePhone.trim() || !freeMsg.trim()) return
     setFreeSending(true)
@@ -415,6 +436,61 @@ curl_close($ch);
 
   return (
     <div className="space-y-5 max-w-2xl">
+
+      {/* Minimal direct test */}
+      <div className="bg-white rounded-2xl border border-red-200 p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <h3 className="font-semibold text-gray-800">0. Minimal Direct Test</h3>
+          <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">Start here</span>
+        </div>
+        <p className="text-sm text-gray-500">
+          Zero abstraction — mirrors the task app PHP exactly. Shows which phone number the credentials belong to
+          and exactly what WhatsApp returns.
+        </p>
+        <div className="flex gap-3 items-end">
+          <div className="flex-1">
+            <label className="text-xs font-medium text-gray-600 block mb-1">Phone to send to</label>
+            <input value={minPhone} onChange={e => setMinPhone(e.target.value)}
+              placeholder="919841081945"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-red-500 outline-none" />
+          </div>
+          <button onClick={runMinimalTest} disabled={minRunning}
+            className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 shrink-0">
+            {minRunning ? 'Running…' : 'Run Minimal Test'}
+          </button>
+        </div>
+        {!minPhone && (
+          <button onClick={() => { setMinPhone(''); runMinimalTest() }}
+            className="text-xs text-gray-500 underline">
+            Or click to just check which phone number the credentials belong to (no message sent)
+          </button>
+        )}
+        {minResult && (
+          <div className="space-y-2">
+            {minResult.sendingFrom && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
+                <p className="font-semibold text-blue-800">Credentials belong to: <span className="text-blue-600">{minResult.sendingFrom}</span></p>
+                <p className="text-xs text-blue-600 mt-0.5">Verified name: {minResult.phoneInfo?.verified_name} · Quality: {minResult.phoneInfo?.quality_rating}</p>
+              </div>
+            )}
+            {minResult.messageId && (
+              <div className={`rounded-lg border p-3 text-sm ${minResult.errorCode ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+                <p className={`font-semibold ${minResult.errorCode ? 'text-red-700' : 'text-green-700'}`}>
+                  {minResult.errorCode
+                    ? `✗ Error ${minResult.errorCode}: ${minResult.errorMessage}`
+                    : `✓ Accepted — Message ID: ${minResult.messageId}`}
+                </p>
+              </div>
+            )}
+            <details open>
+              <summary className="cursor-pointer text-xs text-gray-500 font-medium">Full raw output</summary>
+              <pre className="mt-2 bg-gray-900 text-green-300 p-3 rounded text-[11px] overflow-x-auto whitespace-pre-wrap">
+                {JSON.stringify(minResult, null, 2)}
+              </pre>
+            </details>
+          </div>
+        )}
+      </div>
 
       {/* Full diagnostics */}
       <div className="bg-white rounded-2xl border border-gray-200 p-5 space-y-4">
