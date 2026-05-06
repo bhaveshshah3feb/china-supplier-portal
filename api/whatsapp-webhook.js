@@ -87,37 +87,45 @@ export default async function handler(req, res) {
           const filename    = msg.document?.filename || null
           const waTs        = new Date(parseInt(msg.timestamp, 10) * 1000).toISOString()
 
-          await supabaseAdmin.from('whatsapp_messages').insert({
-            phone_number:  phone,
-            contact_name:  contactName,
-            direction:     'inbound',
-            wa_message_id: msg.id,
-            message_type:  msg.type,
-            content,
-            media_url:     mediaId,
-            filename,
-            status:        'received',
-            wa_timestamp:  waTs,
-          }).catch(err => console.error('Failed to insert inbound message:', err.message))
+          try {
+            await supabaseAdmin.from('whatsapp_messages').insert({
+              phone_number:  phone,
+              contact_name:  contactName,
+              direction:     'inbound',
+              wa_message_id: msg.id,
+              message_type:  msg.type,
+              content,
+              media_url:     mediaId,
+              filename,
+              status:        'received',
+              wa_timestamp:  waTs,
+            })
+          } catch (err) {
+            console.error('Failed to insert inbound message:', err.message)
+          }
 
           // Backfill contact_name on earlier messages from this number
           if (contactName) {
-            await supabaseAdmin
-              .from('whatsapp_messages')
-              .update({ contact_name: contactName })
-              .eq('phone_number', phone)
-              .is('contact_name', null)
-              .catch(() => {})
+            try {
+              await supabaseAdmin
+                .from('whatsapp_messages')
+                .update({ contact_name: contactName })
+                .eq('phone_number', phone)
+                .is('contact_name', null)
+            } catch {}
           }
         }
 
         // ── Delivery / read status updates ─────────────────────
         for (const status of value.statuses || []) {
-          await supabaseAdmin
-            .from('whatsapp_messages')
-            .update({ status: status.status })
-            .eq('wa_message_id', status.id)
-            .catch(err => console.error('Failed to update status:', err.message))
+          try {
+            await supabaseAdmin
+              .from('whatsapp_messages')
+              .update({ status: status.status })
+              .eq('wa_message_id', status.id)
+          } catch (err) {
+            console.error('Failed to update status:', err.message)
+          }
         }
       }
     }

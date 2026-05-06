@@ -32,18 +32,22 @@ async function callWaApi(phoneNumberId, accessToken, payload) {
 }
 
 async function logMessage(supabaseAdmin, { phone, direction, waMessageId, messageType, content, templateName, mediaUrl, filename, status }) {
-  await supabaseAdmin.from('whatsapp_messages').insert({
-    phone_number:  phone,
-    direction,
-    wa_message_id: waMessageId || null,
-    message_type:  messageType,
-    content:       content || null,
-    template_name: templateName || null,
-    media_url:     mediaUrl || null,
-    filename:      filename || null,
-    status,
-    wa_timestamp:  new Date().toISOString(),
-  }).catch(err => console.warn('WA message log failed:', err.message))
+  try {
+    await supabaseAdmin.from('whatsapp_messages').insert({
+      phone_number:  phone,
+      direction,
+      wa_message_id: waMessageId || null,
+      message_type:  messageType,
+      content:       content || null,
+      template_name: templateName || null,
+      media_url:     mediaUrl || null,
+      filename:      filename || null,
+      status,
+      wa_timestamp:  new Date().toISOString(),
+    })
+  } catch (err) {
+    console.warn('WA message log failed:', err.message)
+  }
 }
 
 export default async function handler(req, res) {
