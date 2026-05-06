@@ -158,7 +158,7 @@ export default async function handler(req, res) {
     const { to_phone, file_url, file_type } = req.body || {}
     if (to_phone && file_url) {
       const cleanPhone = to_phone.replace(/[^\d]/g, '')
-      const lang = results.detectedLang?.[file_type === 'video' ? 'game_vidpic' : 'game_pic'] || 'en'
+      const lang = results.detectedLang?.[file_type === 'video' ? 'game_vidpic' : 'game_pic'] || 'en_US'
       const templateName = file_type === 'video' ? 'game_vidpic' : 'game_pic'
 
       const payload = {
