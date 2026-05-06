@@ -128,7 +128,8 @@ export default async function handler(req, res) {
         messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
         type: 'text', text: { preview_url: false, body: message_text },
       }
-      console.log('Sending WA text to', cleanPhone)
+      // Log full details to Vercel so we can see exactly what is being sent
+      console.log('WA free-form | phoneNumberId:', phoneNumberId, '| to:', cleanPhone, '| tokenTail:', accessToken.slice(-8))
       const { res: waRes, data: waData } = await callWaApi(phoneNumberId, accessToken, payload)
 
       if (!waRes.ok || waData.error) {
