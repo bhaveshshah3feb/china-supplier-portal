@@ -11,7 +11,6 @@ function UploadThumb({ upload }) {
   const isVid = upload.file_type === 'video'
   const isImg = upload.file_type === 'image'
 
-  // Fetch signed URL when row scrolls into view
   useEffect(() => {
     if (!isVid && !isImg) return
     let done = false
@@ -90,8 +89,19 @@ export default function UploadsTab() {
   const [filter, setFilter]           = useState({ type: 'all', status: 'all' })
   const [triggering, setTriggering]   = useState(false)
   const [triggerMsg, setTriggerMsg]   = useState(null) // { type: 'ok'|'err', text }
+  const [selected, setSelected]       = useState(new Set())
+  const [deleting, setDeleting]       = useState(false)
 
   useEffect(() => { load() }, [filter])
+
+  // Clean up stale selections when uploads change
+  useEffect(() => {
+    const validIds = new Set(uploads.map(u => u.id))
+    setSelected(prev => {
+      const filtered = new Set([...prev].filter(id => validIds.has(id)))
+      return filtered.size === prev.size ? prev : filtered
+    })
+  }, [uploads])
 
   async function load() {
     setLoading(true)
@@ -113,6 +123,20 @@ export default function UploadsTab() {
       setLoading(false)
     }
   }
+
+  function toggleSelect(id) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAll() {
+    setSelected(prev => prev.size === uploads.length ? new Set() : new Set(uploads.map(u => u.id)))
+  }
+
+  function clearSelection() { setSelected(new Set()) }
 
   async function viewOriginal(upload) {
     try {
@@ -149,28 +173,49 @@ export default function UploadsTab() {
   async function deleteUpload(upload) {
     if (!window.confirm(t('admin.confirmDelete'))) return
     try {
-      // 1. Delete processing_queue rows first — they have a FK → uploads
       await supabase.from('processing_queue').delete().eq('upload_id', upload.id)
-
-      // 2. Delete the uploads record
       const { error: dbErr } = await supabase.from('uploads').delete().eq('id', upload.id)
       if (dbErr) throw new Error(`DB delete failed: ${dbErr.message}`)
-
-      // 3. Delete files from storage (best-effort — don't block on storage errors)
       if (upload.storage_path)
         await supabase.storage.from('uploads').remove([upload.storage_path]).catch(() => {})
       if (upload.sales_path)
         await supabase.storage.from('sales').remove([upload.sales_path]).catch(() => {})
-
       setUploads(prev => prev.filter(u => u.id !== upload.id))
     } catch (err) {
       alert(`Could not delete: ${err.message}\n\nIf this keeps happening, run this SQL in Supabase:\nCREATE POLICY "uploads_admin_delete" ON uploads FOR DELETE USING (EXISTS (SELECT 1 FROM admins WHERE id = auth.uid()));`)
     }
   }
 
-  const typeIcon = t => t === 'video' ? '🎬' : t === 'image' ? '🖼️' : '📄'
+  async function deleteSelected() {
+    if (!window.confirm(`Delete ${selected.size} file${selected.size !== 1 ? 's' : ''}? This cannot be undone.`)) return
+    setDeleting(true)
+    const ids = [...selected]
+    let failed = 0
 
+    for (const id of ids) {
+      const upload = uploads.find(u => u.id === id)
+      if (!upload) continue
+      try {
+        await supabase.from('processing_queue').delete().eq('upload_id', id)
+        const { error: dbErr } = await supabase.from('uploads').delete().eq('id', id)
+        if (dbErr) throw new Error(dbErr.message)
+        if (upload.storage_path) await supabase.storage.from('uploads').remove([upload.storage_path]).catch(() => {})
+        if (upload.sales_path)   await supabase.storage.from('sales').remove([upload.sales_path]).catch(() => {})
+        setUploads(prev => prev.filter(u => u.id !== id))
+      } catch (err) {
+        console.error('Failed to delete upload', id, err.message)
+        failed++
+      }
+    }
+
+    setSelected(new Set())
+    setDeleting(false)
+    if (failed > 0) alert(`${failed} file(s) could not be deleted. Check the browser console for details.`)
+  }
+
+  const typeIcon = t => t === 'video' ? '🎬' : t === 'image' ? '🖼️' : '📄'
   const pendingCount = uploads.filter(u => ['pending','processing'].includes(u.processing_status)).length
+  const allSelected  = uploads.length > 0 && selected.size === uploads.length
 
   return (
     <div className="space-y-4">
@@ -194,6 +239,12 @@ export default function UploadsTab() {
           ↻ Refresh
         </button>
         <div className="ml-auto flex items-center gap-3 flex-wrap">
+          {selected.size > 0 && (
+            <button onClick={deleteSelected} disabled={deleting}
+              className="bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-200 disabled:opacity-50 transition-colors flex items-center gap-1.5">
+              {deleting ? '⏳ Deleting…' : `🗑 Delete Selected (${selected.size})`}
+            </button>
+          )}
           <button onClick={triggerProcessing} disabled={triggering}
             className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors flex items-center gap-2">
             {triggering ? '⏳ Triggering…' : `▶ Process Now${pendingCount > 0 ? ` (${pendingCount} pending)` : ''}`}
@@ -216,58 +267,79 @@ export default function UploadsTab() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  {['','File','Supplier','Type','Category','Size','Status','Uploaded',''].map(h => (
-                    <th key={h} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
+                  <th className="px-3 py-3 w-8">
+                    <button
+                      onClick={toggleSelectAll}
+                      className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-colors
+                        ${allSelected ? 'bg-red-600 border-red-600' : 'border-gray-300 hover:border-red-400'}`}
+                    >
+                      {allSelected && <span className="text-white text-[9px] font-bold leading-none">✓</span>}
+                    </button>
+                  </th>
+                  {['','File','Supplier','Type','Category','Size','Status','Uploaded',''].map((h, i) => (
+                    <th key={i} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {uploads.map(u => (
-                  <tr key={u.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-3 py-2">
-                      <UploadThumb upload={u} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span>{typeIcon(u.file_type)}</span>
-                        <span className="text-gray-700 max-w-40 truncate">{u.original_filename}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <p className="text-gray-700">{u.suppliers?.company_name_en}</p>
-                      <p className="text-xs text-gray-400 font-mono">{u.suppliers?.supplier_code}</p>
-                    </td>
-                    <td className="px-4 py-3 text-gray-500 capitalize">{u.file_type}</td>
-                    <td className="px-4 py-3 text-gray-500">
-                      {u.main_categories?.name_en || '—'}
-                      {u.sub_categories?.name_en && <span className="text-gray-400"> › {u.sub_categories.name_en}</span>}
-                    </td>
-                    <td className="px-4 py-3 text-gray-500">{fmtBytes(u.file_size)}</td>
-                    <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-1 rounded-full font-medium ${PROC_BADGE[u.processing_status]}`}>
-                        {u.processing_status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">
-                      {new Date(u.created_at).toLocaleString('en-IN', {
-                        day: 'numeric', month: 'short', year: 'numeric',
-                        hour: '2-digit', minute: '2-digit', hour12: true,
-                      })}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1">
-                        <button onClick={() => viewOriginal(u)}
-                          className="text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 px-2 py-1 rounded-lg transition-colors">
-                          View ↗
+                {uploads.map(u => {
+                  const isSelected = selected.has(u.id)
+                  return (
+                    <tr key={u.id} className={`transition-colors ${isSelected ? 'bg-red-50' : 'hover:bg-gray-50'}`}>
+                      <td className="px-3 py-2">
+                        <button
+                          onClick={() => toggleSelect(u.id)}
+                          className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-colors
+                            ${isSelected ? 'bg-red-600 border-red-600' : 'border-gray-300 hover:border-red-400'}`}
+                        >
+                          {isSelected && <span className="text-white text-[9px] font-bold leading-none">✓</span>}
                         </button>
-                        <button onClick={() => deleteUpload(u)}
-                          className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors">
-                          {t('admin.delete')}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="px-3 py-2">
+                        <UploadThumb upload={u} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span>{typeIcon(u.file_type)}</span>
+                          <span className="text-gray-700 max-w-40 truncate">{u.original_filename}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-gray-700">{u.suppliers?.company_name_en}</p>
+                        <p className="text-xs text-gray-400 font-mono">{u.suppliers?.supplier_code}</p>
+                      </td>
+                      <td className="px-4 py-3 text-gray-500 capitalize">{u.file_type}</td>
+                      <td className="px-4 py-3 text-gray-500">
+                        {u.main_categories?.name_en || '—'}
+                        {u.sub_categories?.name_en && <span className="text-gray-400"> › {u.sub_categories.name_en}</span>}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500">{fmtBytes(u.file_size)}</td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs px-2 py-1 rounded-full font-medium ${PROC_BADGE[u.processing_status]}`}>
+                          {u.processing_status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">
+                        {new Date(u.created_at).toLocaleString('en-IN', {
+                          day: 'numeric', month: 'short', year: 'numeric',
+                          hour: '2-digit', minute: '2-digit', hour12: true,
+                        })}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1">
+                          <button onClick={() => viewOriginal(u)}
+                            className="text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 px-2 py-1 rounded-lg transition-colors">
+                            View ↗
+                          </button>
+                          <button onClick={() => deleteUpload(u)}
+                            className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors">
+                            {t('admin.delete')}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

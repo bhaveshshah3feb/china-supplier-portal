@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase, getSalesUrl } from '../../../lib/supabase'
 
+const WA_LIMITS_MB = { video: 16, image: 5, pricelist: 100, document: 100 }
+
 function fmtBytes(b) {
   if (!b) return '—'
   if (b < 1024 ** 2) return `${(b / 1024).toFixed(0)} KB`
@@ -9,6 +11,19 @@ function fmtBytes(b) {
 }
 
 const TYPE_ICON = { video: '🎬', image: '🖼️', pricelist: '📊', document: '📄', other: '📁' }
+
+function waLimitWarning(file) {
+  const sizeMB = (file.file_size || 0) / 1024 / 1024
+  const limitMB = WA_LIMITS_MB[file.file_type] ?? 100
+  if (sizeMB > limitMB) return `${sizeMB.toFixed(1)} MB > ${limitMB} MB WA limit`
+  return null
+}
+
+function templatePreview(fileType, name, cat) {
+  if (fileType === 'document' || fileType === 'pricelist') return `"${name} — ${cat}"`
+  const typeWord = fileType === 'image' ? 'image' : 'video'
+  return `"Here's the ${typeWord} for ${name} — ${cat}"`
+}
 
 // ── Hover-to-play thumbnail (sales bucket — public URLs) ──────
 function SalesThumb({ file, onClick }) {
@@ -20,7 +35,6 @@ function SalesThumb({ file, onClick }) {
   const isVid = file.file_type === 'video'
   const isImg = file.file_type === 'image'
 
-  // Load metadata (shows first frame) when card scrolls into view
   useEffect(() => {
     if (!isVid) return
     const observer = new IntersectionObserver(
@@ -31,11 +45,9 @@ function SalesThumb({ file, onClick }) {
     return () => observer.disconnect()
   }, [isVid])
 
-  // Seek to 1 s once metadata is ready — gives a better thumbnail than frame 0
   function onLoadedMetadata() {
     if (videoRef.current && !hovered) videoRef.current.currentTime = 1
   }
-
   function handleMouseEnter() {
     setHovered(true)
     if (videoRef.current) { videoRef.current.currentTime = 0; videoRef.current.play().catch(() => {}) }
@@ -82,28 +94,25 @@ function SalesThumb({ file, onClick }) {
   )
 }
 
-// ── Share Modal ───────────────────────────────────────────────
+// ── Single Share Modal ────────────────────────────────────────
 function ShareModal({ file, onClose }) {
   const url       = getSalesUrl(file.sales_path)
   const filename  = file.display_name || file.original_filename
   const fileType  = file.file_type
   const sizeMB    = (file.file_size || 0) / 1024 / 1024
 
-  // Machine name: prefer AI game name → display name → filename without extension
-  const machineName = file.ai_game_name
-    || file.display_name
-    || file.original_filename.replace(/\.[^.]+$/, '')
+  const machineName = file.ai_game_name || file.display_name || file.original_filename.replace(/\.[^.]+$/, '')
   const category = file.main_categories?.name_en || ''
-
-  const typeWord = fileType === 'video' ? 'video' : fileType === 'image' ? 'image' : 'file'
 
   const [phone, setPhone]         = useState('')
   const [email, setEmail]         = useState('')
   const [waName, setWaName]       = useState(machineName)
   const [waCat, setWaCat]         = useState(category)
   const [waSending, setWaSending] = useState(false)
-  const [waResult, setWaResult]   = useState(null)  // null | 'ok' | string(err)
+  const [waResult, setWaResult]   = useState(null)
   const [copied, setCopied]       = useState(false)
+
+  const waWarning = waLimitWarning(file)
 
   async function sendWhatsApp() {
     if (!phone.trim()) return
@@ -113,25 +122,19 @@ function ShareModal({ file, onClose }) {
       const { data: { session } } = await supabase.auth.getSession()
       const res = await fetch('/api/send-whatsapp', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.access_token}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
         body: JSON.stringify({
-          to_phone:     phone,
-          file_url:     url,
-          filename:     filename,
-          file_type:    fileType,
+          to_phone: phone,
+          file_url: url,
+          filename,
+          file_type: fileType,
+          file_size: file.file_size,
           machine_name: waName,
-          category:     waCat,
+          category: waCat,
         }),
       })
       const body = await res.json()
-      if (body.success) {
-        setWaResult('ok')
-      } else {
-        setWaResult(body.error || 'Failed to send')
-      }
+      setWaResult(body.success ? 'ok' : (body.error || 'Failed to send'))
     } catch {
       setWaResult('Network error — check connection')
     } finally {
@@ -141,11 +144,13 @@ function ShareModal({ file, onClose }) {
 
   function openWaLink() {
     const cleanPhone = phone.replace(/[^\d]/g, '')
-    const msg = encodeURIComponent(`Here's the video for ${waName} — ${waCat}`)
+    const typeWord = fileType === 'image' ? 'image' : 'video'
+    const msg = encodeURIComponent(`Here's the ${typeWord} for ${waName} — ${waCat}`)
     window.open(`https://wa.me/${cleanPhone}?text=${msg}`, '_blank')
   }
 
   function openMailto() {
+    const typeWord = fileType === 'video' ? 'video' : fileType === 'image' ? 'image' : 'file'
     const subject = encodeURIComponent(`Amusement Equipment: ${filename}`)
     const body = encodeURIComponent(
       `Hi,\n\nPlease find the ${typeWord} for ${machineName}${category ? ` (${category})` : ''} below:\n\n${url}\n\n` +
@@ -165,7 +170,6 @@ function ShareModal({ file, onClose }) {
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
 
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
           <div>
             <p className="font-semibold text-gray-800 truncate max-w-xs">{filename}</p>
@@ -175,8 +179,6 @@ function ShareModal({ file, onClose }) {
         </div>
 
         <div className="p-5 space-y-5">
-
-          {/* Quick actions */}
           <div className="flex gap-2">
             <button onClick={copyLink}
               className="flex-1 flex items-center justify-center gap-1.5 bg-gray-100 text-gray-700 hover:bg-gray-200 px-3 py-2 rounded-lg text-sm transition-colors">
@@ -188,16 +190,14 @@ function ShareModal({ file, onClose }) {
             </a>
           </div>
 
-          {/* WhatsApp section */}
           <div className="space-y-3">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Share via WhatsApp</p>
-            <input
-              type="tel"
-              value={phone}
-              onChange={e => setPhone(e.target.value)}
+            {waWarning && (
+              <p className="text-xs text-orange-600 bg-orange-50 px-3 py-2 rounded-lg">⚠ {waWarning} — may be rejected by WhatsApp</p>
+            )}
+            <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
               placeholder="Phone with country code (e.g. 919876543210)"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none"
-            />
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none" />
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Machine Name</label>
@@ -211,7 +211,7 @@ function ShareModal({ file, onClose }) {
               </div>
             </div>
             <p className="text-xs text-gray-400 bg-gray-50 px-3 py-2 rounded-lg italic">
-              "{`Here's the video for ${waName} — ${waCat}`}"
+              {templatePreview(fileType, waName, waCat)}
             </p>
             <div className="flex gap-2">
               <button onClick={sendWhatsApp} disabled={waSending || !phone.trim()}
@@ -235,16 +235,11 @@ function ShareModal({ file, onClose }) {
             </p>
           </div>
 
-          {/* Email section */}
           <div className="space-y-3">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Share via Email</p>
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
               placeholder="customer@example.com"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-            />
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
             <button onClick={openMailto} disabled={!email.trim()}
               className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
               Open in Email Client ↗
@@ -252,6 +247,178 @@ function ShareModal({ file, onClose }) {
             <p className="text-[10px] text-gray-400">
               Opens your default email app with the file link pre-filled.
               {sizeMB < 20 ? ' File is under 20 MB — you can attach it manually too.' : ' File is large — the link allows direct download.'}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Multi-Share Modal ─────────────────────────────────────────
+function MultiShareModal({ files, onClose }) {
+  const [phone, setPhone] = useState('')
+  const [email, setEmail] = useState('')
+  const [fileFields, setFileFields] = useState(
+    files.map(f => ({
+      id: f.id,
+      waName: f.ai_game_name || f.display_name || f.original_filename.replace(/\.[^.]+$/, ''),
+      waCat: f.main_categories?.name_en || 'Amusement Equipment',
+    }))
+  )
+  const [waSending, setWaSending] = useState(false)
+  const [waProgress, setWaProgress] = useState([])
+
+  function updateField(idx, key, val) {
+    setFileFields(prev => prev.map((f, i) => i === idx ? { ...f, [key]: val } : f))
+  }
+
+  async function sendAllWhatsApp() {
+    if (!phone.trim()) return
+    setWaSending(true)
+    const statuses = new Array(files.length).fill(null)
+    setWaProgress([...statuses])
+    const { data: { session } } = await supabase.auth.getSession()
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      const fields = fileFields[i]
+      const warning = waLimitWarning(file)
+      if (warning) {
+        statuses[i] = `Skipped: ${warning}`
+        setWaProgress([...statuses])
+        continue
+      }
+      statuses[i] = 'sending'
+      setWaProgress([...statuses])
+      try {
+        const res = await fetch('/api/send-whatsapp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+          body: JSON.stringify({
+            to_phone: phone,
+            file_url: getSalesUrl(file.sales_path),
+            filename: file.display_name || file.original_filename,
+            file_type: file.file_type,
+            file_size: file.file_size,
+            machine_name: fields.waName,
+            category: fields.waCat,
+          }),
+        })
+        const body = await res.json()
+        statuses[i] = body.success ? 'ok' : (body.error || 'Failed')
+      } catch {
+        statuses[i] = 'Network error'
+      }
+      setWaProgress([...statuses])
+    }
+    setWaSending(false)
+  }
+
+  function openMultiMailto() {
+    const subject = encodeURIComponent(`Amusement Equipment — ${files.length} Files`)
+    const bodyLines = files.map((f, i) => {
+      const url = getSalesUrl(f.sales_path)
+      const { waName, waCat } = fileFields[i]
+      return `${i + 1}. ${waName}${waCat ? ` (${waCat})` : ''}\n   ${url}\n   Size: ${fmtBytes(f.file_size)}`
+    })
+    const body = encodeURIComponent(
+      `Hi,\n\nPlease find the following amusement equipment files:\n\n${bodyLines.join('\n\n')}\n\nBest regards,\nBhavesh — Aryan Amusements\n+91 9841081945`
+    )
+    window.open(`mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`)
+  }
+
+  const sentCount = waProgress.filter(s => s === 'ok').length
+  const doneCount = waProgress.filter(s => s !== null && s !== 'sending').length
+  const allDone   = waProgress.length > 0 && doneCount === files.length
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+        onClick={e => e.stopPropagation()}>
+
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
+          <div>
+            <p className="font-semibold text-gray-800">Share {files.length} Files</p>
+            <p className="text-xs text-gray-400">WhatsApp sends {files.length} separate messages · Email bundles all links in one</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+
+          {/* File list with editable name/category */}
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Files ({files.length})</p>
+            <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+              {files.map((file, idx) => {
+                const warning = waLimitWarning(file)
+                const status  = waProgress[idx]
+                return (
+                  <div key={file.id} className={`flex items-center gap-2 p-2 rounded-lg ${warning ? 'bg-orange-50' : 'bg-gray-50'}`}>
+                    <span className="text-base shrink-0">{TYPE_ICON[file.file_type] || '📁'}</span>
+                    <div className="flex-1 min-w-0 grid grid-cols-2 gap-1">
+                      <input value={fileFields[idx]?.waName || ''}
+                        onChange={e => updateField(idx, 'waName', e.target.value)}
+                        placeholder="Machine name"
+                        className="border border-gray-200 rounded px-2 py-1 text-xs focus:ring-1 focus:ring-green-500 outline-none bg-white" />
+                      <input value={fileFields[idx]?.waCat || ''}
+                        onChange={e => updateField(idx, 'waCat', e.target.value)}
+                        placeholder="Category"
+                        className="border border-gray-200 rounded px-2 py-1 text-xs focus:ring-1 focus:ring-green-500 outline-none bg-white" />
+                      {warning && <p className="col-span-2 text-[10px] text-orange-600 mt-0.5">⚠ {warning} — will be skipped</p>}
+                    </div>
+                    <div className="shrink-0 w-20 text-right text-xs">
+                      {(status === null || status === undefined) && <span className="text-gray-400">{fmtBytes(file.file_size)}</span>}
+                      {status === 'sending' && <span className="text-blue-500">Sending…</span>}
+                      {status === 'ok' && <span className="text-green-600 font-medium">✓ Sent</span>}
+                      {status && status !== 'sending' && status !== 'ok' && (
+                        <span className="text-red-500 text-[10px] leading-tight block">{status.slice(0, 28)}</span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* WhatsApp */}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Share via WhatsApp</p>
+            <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
+              placeholder="Phone with country code (e.g. 919876543210)"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none" />
+            {allDone && (
+              <p className={`text-xs px-3 py-2 rounded-lg ${sentCount > 0 ? 'text-green-700 bg-green-50' : 'text-gray-600 bg-gray-50'}`}>
+                {sentCount > 0
+                  ? `✓ ${sentCount}/${files.length} messages sent successfully`
+                  : 'All messages skipped (files exceeded WhatsApp size limits)'}
+              </p>
+            )}
+            <button onClick={sendAllWhatsApp} disabled={waSending || !phone.trim()}
+              className="w-full bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors">
+              {waSending
+                ? `Sending ${waProgress.filter(s => s !== null).length}/${files.length}…`
+                : `Send ${files.length} WhatsApp Messages`}
+            </button>
+            <p className="text-[10px] text-gray-400">
+              Each file is sent as a separate WhatsApp message (1 media attachment per template).
+              Files over the size limit are skipped automatically.
+            </p>
+          </div>
+
+          {/* Email */}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Share via Email</p>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+              placeholder="customer@example.com"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+            <button onClick={openMultiMailto} disabled={!email.trim()}
+              className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
+              Open Email with All {files.length} Links ↗
+            </button>
+            <p className="text-[10px] text-gray-400">
+              Opens your email client with all {files.length} file download links in the message body.
             </p>
           </div>
 
@@ -271,11 +438,22 @@ export default function SalesLibraryTab() {
   const [copied, setCopied]         = useState(null)
   const [preview, setPreview]       = useState(null)
   const [sharing, setSharing]       = useState(null)
+  const [selected, setSelected]     = useState(new Set())
+  const [multiSharing, setMultiSharing] = useState(false)
 
   const [filter, setFilter] = useState({ supplier: 'all', category: 'all', type: 'all' })
 
   useEffect(() => { loadMeta() }, [])
   useEffect(() => { load() }, [filter])
+
+  // Clean up stale selections when file list changes
+  useEffect(() => {
+    const validIds = new Set(files.map(f => f.id))
+    setSelected(prev => {
+      const filtered = new Set([...prev].filter(id => validIds.has(id)))
+      return filtered.size === prev.size ? prev : filtered
+    })
+  }, [files])
 
   async function loadMeta() {
     const [{ data: sups }, { data: cats }] = await Promise.all([
@@ -310,6 +488,18 @@ export default function SalesLibraryTab() {
     setFiles(data || [])
     setLoading(false)
   }
+
+  function toggleSelect(id) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  function clearSelection() { setSelected(new Set()) }
+
+  const selectedFiles = files.filter(f => selected.has(f.id))
 
   async function copyUrl(file) {
     const url = getSalesUrl(file.sales_path)
@@ -382,6 +572,23 @@ export default function SalesLibraryTab() {
         </div>
       </div>
 
+      {/* Selection bar */}
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-xl px-4 py-2.5">
+          <span className="text-sm font-medium text-green-800">
+            {selected.size} file{selected.size !== 1 ? 's' : ''} selected
+          </span>
+          <button onClick={() => setMultiSharing(true)}
+            className="bg-green-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors">
+            Share Selected ({selected.size})
+          </button>
+          <button onClick={clearSelection}
+            className="text-sm text-green-700 hover:text-green-900 ml-auto transition-colors">
+            Clear
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <div className="py-16 text-center text-gray-400">Loading sales library…</div>
       ) : files.length === 0 ? (
@@ -394,20 +601,29 @@ export default function SalesLibraryTab() {
         /* ── Grid ── */
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
           {files.map(file => {
-            const url   = getSalesUrl(file.sales_path)
-            const isImg = file.file_type === 'image'
-            const isVid = file.file_type === 'video'
+            const url      = getSalesUrl(file.sales_path)
+            const isSelected = selected.has(file.id)
             return (
-              <div key={file.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
-                <SalesThumb file={file} onClick={() => setPreview(file)} />
-                {/* Info */}
+              <div key={file.id}
+                className={`bg-white rounded-xl border-2 overflow-hidden hover:shadow-md transition-all ${isSelected ? 'border-green-500 shadow-md' : 'border-gray-200'}`}>
+                <div className="relative">
+                  <SalesThumb file={file} onClick={() => setPreview(file)} />
+                  {/* Selection checkbox */}
+                  <button
+                    className={`absolute top-1.5 right-1.5 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors
+                      ${isSelected ? 'bg-green-600 border-green-600' : 'bg-white/90 border-gray-400 hover:border-green-500'}`}
+                    onClick={e => { e.stopPropagation(); toggleSelect(file.id) }}
+                  >
+                    {isSelected && <span className="text-white text-[10px] font-bold leading-none">✓</span>}
+                  </button>
+                </div>
                 <div className="p-2.5 space-y-1">
                   <p className="text-xs font-medium text-gray-800 truncate">{file.display_name || file.original_filename}</p>
                   <p className="text-[10px] text-gray-400 truncate">
                     {file.main_categories?.name_en}{file.sub_categories && <> › {file.sub_categories.name_en}</>}
                   </p>
                   <p className="text-[10px] text-gray-400">{file.suppliers?.company_name_en} · {fmtBytes(file.file_size)}</p>
-                  <p className="text-[10px] text-gray-300">Added {new Date(file.created_at).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}</p>
+                  <p className="text-[10px] text-gray-300">Added {new Date(file.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
                   <div className="flex gap-1 pt-1">
                     <button onClick={() => setSharing(file)}
                       className="flex-1 text-center text-[10px] bg-green-50 text-green-700 hover:bg-green-100 px-1.5 py-1 rounded transition-colors font-medium">
@@ -438,16 +654,27 @@ export default function SalesLibraryTab() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  {['', 'File', 'Supplier', 'Category', 'Size', 'Added', 'Actions'].map(h => (
-                    <th key={h} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
+                  <th className="px-3 py-3 w-8"></th>
+                  {['', 'File', 'Supplier', 'Category', 'Size', 'Added', 'Actions'].map((h, i) => (
+                    <th key={i} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {files.map(file => {
-                  const url = getSalesUrl(file.sales_path)
+                  const url        = getSalesUrl(file.sales_path)
+                  const isSelected = selected.has(file.id)
                   return (
-                    <tr key={file.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={file.id} className={`transition-colors ${isSelected ? 'bg-green-50' : 'hover:bg-gray-50'}`}>
+                      <td className="px-3 py-3">
+                        <button
+                          onClick={() => toggleSelect(file.id)}
+                          className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-colors
+                            ${isSelected ? 'bg-green-600 border-green-600' : 'border-gray-300 hover:border-green-500'}`}
+                        >
+                          {isSelected && <span className="text-white text-[9px] font-bold leading-none">✓</span>}
+                        </button>
+                      </td>
                       <td className="px-3 py-2 w-24">
                         <div className="w-20 h-14 rounded overflow-hidden">
                           <SalesThumb file={file} onClick={() => setPreview(file)} />
@@ -464,7 +691,7 @@ export default function SalesLibraryTab() {
                       </td>
                       <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{fmtBytes(file.file_size)}</td>
                       <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">
-                        {new Date(file.created_at).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}
+                        {new Date(file.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-1 flex-wrap">
@@ -476,7 +703,8 @@ export default function SalesLibraryTab() {
                             className="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-2 py-1 rounded-lg transition-colors">
                             Preview
                           </button>
-                          <a href={getSalesUrl(file.sales_path, { download: true, filename: file.display_name || file.original_filename })} target="_blank" rel="noreferrer"
+                          <a href={getSalesUrl(file.sales_path, { download: true, filename: file.display_name || file.original_filename })}
+                            target="_blank" rel="noreferrer"
                             className="text-xs bg-gray-100 text-gray-600 hover:bg-gray-200 px-2 py-1 rounded-lg transition-colors">
                             ⬇ Download
                           </a>
@@ -552,8 +780,13 @@ export default function SalesLibraryTab() {
         </div>
       )}
 
-      {/* ── Share Modal ── */}
+      {/* ── Single Share Modal ── */}
       {sharing && <ShareModal file={sharing} onClose={() => setSharing(null)} />}
+
+      {/* ── Multi Share Modal ── */}
+      {multiSharing && selectedFiles.length > 0 && (
+        <MultiShareModal files={selectedFiles} onClose={() => setMultiSharing(false)} />
+      )}
 
     </div>
   )
