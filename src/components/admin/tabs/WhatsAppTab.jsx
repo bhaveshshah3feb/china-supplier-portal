@@ -437,35 +437,65 @@ curl_close($ch);
         )}
       </div>
 
-      {/* Webhook setup */}
+      {/* PHP Forwarding setup */}
       <div className="bg-white rounded-2xl border border-gray-200 p-5 space-y-4">
-        <h3 className="font-semibold text-gray-800">3. Webhook Setup (Receive Incoming Messages)</h3>
+        <h3 className="font-semibold text-gray-800">3. Receive Incoming Messages (PHP Forwarding)</h3>
         <p className="text-sm text-gray-500">
-          Configure this in Meta Developer Portal so incoming customer messages appear in your inbox.
+          Your existing webhook at <code className="bg-gray-100 px-1 rounded text-xs">indiajobwork.com/tasks/api/wa_webhook.php</code> stays
+          untouched. You just add ~10 lines to it so it forwards a copy of every event to this portal.
+          Your task app continues to work exactly as before.
         </p>
 
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs font-medium text-gray-600 block mb-1">Our Webhook URL (for forwarding)</label>
-            <div className="flex gap-2">
-              <input readOnly value={forwardUrl}
-                className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono bg-gray-50 text-gray-700" />
-              <button onClick={copySnippet}
-                className="border border-gray-300 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">
-                Copy PHP
-              </button>
-            </div>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-gray-600 block mb-1">Forward Secret</label>
-            <input readOnly value={forwardSecret || '(not set — add in Settings → WhatsApp → Webhook Forward Secret)'}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono bg-gray-50 text-gray-700" />
-          </div>
+        <div className="bg-blue-50 rounded-xl p-4 text-xs text-blue-800 space-y-2">
+          <p className="font-semibold">Step-by-step:</p>
+          <ol className="list-decimal list-inside space-y-1.5 text-blue-700">
+            <li>Go to <strong>Settings → WhatsApp → Webhook Forward Secret</strong> and enter any random string (e.g. <code>aryan-wa-2026</code>). Save.</li>
+            <li>Come back here — the PHP snippet below will update with your secret filled in.</li>
+            <li>Click <strong>Copy PHP Snippet</strong> and paste it into <code>wa_webhook.php</code> on your server, right after the line that reads the POST body.</li>
+            <li>Done — incoming messages from customers will appear in the Inbox tab in real time.</li>
+          </ol>
         </div>
 
-        <div className="bg-blue-50 rounded-xl p-4 text-xs text-blue-800 space-y-1.5">
-          <p className="font-semibold">Setup instructions will be shown here once you decide on the approach.</p>
-          <p className="text-blue-600">Use the "Copy PHP" button above to copy the PHP forwarding snippet once your Forward Secret is saved in Settings.</p>
+        {/* Forward secret status */}
+        {!forwardSecret && (
+          <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 px-3 py-2 rounded-lg">
+            ⚠ Forward Secret not set yet. Go to Settings → WhatsApp → Webhook Forward Secret and save a value first.
+          </div>
+        )}
+        {forwardSecret && (
+          <div className="flex items-center gap-2 text-xs text-green-700 bg-green-50 px-3 py-2 rounded-lg">
+            ✓ Forward Secret is set. Your PHP snippet is ready below.
+          </div>
+        )}
+
+        {/* PHP snippet */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-medium text-gray-600">PHP snippet to add to wa_webhook.php</label>
+            <button onClick={copySnippet}
+              className="bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-green-700 transition-colors">
+              Copy PHP Snippet
+            </button>
+          </div>
+          <pre className="bg-gray-900 text-green-300 text-[11px] rounded-xl p-4 overflow-x-auto leading-relaxed whitespace-pre">
+{buildPhpSnippet()}
+          </pre>
+        </div>
+
+        {/* Our URL for reference */}
+        <div>
+          <label className="text-xs font-medium text-gray-600 block mb-1">Our endpoint URL (already in the snippet above)</label>
+          <input readOnly value={forwardUrl}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono bg-gray-50 text-gray-700" />
+        </div>
+
+        <div className="bg-gray-50 rounded-xl p-4 text-xs text-gray-600 space-y-1">
+          <p className="font-semibold text-gray-700">Where to place the snippet in wa_webhook.php</p>
+          <p>Near the top of the file, find the line that reads the POST body — usually looks like:</p>
+          <pre className="bg-white border border-gray-200 rounded px-3 py-2 mt-1 text-gray-700">{`$data = json_decode(file_get_contents('php://input'), true);`}</pre>
+          <p className="mt-1">Change it to two lines so the raw body is saved before decoding:</p>
+          <pre className="bg-white border border-gray-200 rounded px-3 py-2 mt-1 text-gray-700">{`$raw_body = file_get_contents('php://input');\n$data = json_decode($raw_body, true);`}</pre>
+          <p className="mt-1">Then paste the forwarding snippet anywhere after those two lines.</p>
         </div>
       </div>
 
