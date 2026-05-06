@@ -286,10 +286,14 @@ function TestPanel() {
   const [diagFileType, setDiagFileType] = useState('image')
   const [diagResult, setDiagResult] = useState(null)
   const [diagRunning, setDiagRunning] = useState(false)
-  const [testPhone, setTestPhone]   = useState('')
-  const [testText, setTestText]     = useState('')
-  const [testResult, setTestResult] = useState(null)
+  const [testPhone, setTestPhone]     = useState('')
+  const [testText, setTestText]       = useState('')
+  const [testResult, setTestResult]   = useState(null)
   const [testSending, setTestSending] = useState(false)
+  const [freePhone, setFreePhone]     = useState('')
+  const [freeMsg, setFreeMsg]         = useState('Hi, this is a test message from Aryan Amusements.')
+  const [freeResult, setFreeResult]   = useState(null)
+  const [freeSending, setFreeSending] = useState(false)
   const [forwardUrl, setForwardUrl]     = useState('')
   const [forwardSecret, setForwardSecret] = useState('')
 
@@ -357,6 +361,26 @@ function TestPanel() {
       setTestResult({ error: err.message })
     } finally {
       setTestSending(false)
+    }
+  }
+
+  async function sendFreeForm() {
+    if (!freePhone.trim() || !freeMsg.trim()) return
+    setFreeSending(true)
+    setFreeResult(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/send-whatsapp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ to_phone: freePhone.trim(), message_text: freeMsg.trim(), message_type: 'text' }),
+      })
+      const data = await res.json()
+      setFreeResult({ httpStatus: res.status, ...data })
+    } catch (err) {
+      setFreeResult({ error: err.message })
+    } finally {
+      setFreeSending(false)
     }
   }
 
@@ -524,9 +548,52 @@ curl_close($ch);
         )}
       </div>
 
+      {/* Free-form text test — uses 24h window, shows complete raw response */}
+      <div className="bg-white rounded-2xl border border-gray-200 p-5 space-y-4">
+        <h3 className="font-semibold text-gray-800">3. Free-Form Text Message (Raw Error Capture)</h3>
+        <p className="text-sm text-gray-500">
+          Sends a plain text message. Only works within 24 hours of the customer last messaging you —
+          use this when that window is open to confirm the API connection works and capture the exact error if it doesn't.
+        </p>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">Phone (with country code)</label>
+            <input value={freePhone} onChange={e => setFreePhone(e.target.value)}
+              placeholder="919841081945"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-green-500 outline-none" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">Message</label>
+            <textarea value={freeMsg} onChange={e => setFreeMsg(e.target.value)} rows={2}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none resize-none" />
+          </div>
+          <button onClick={sendFreeForm} disabled={freeSending || !freePhone.trim() || !freeMsg.trim()}
+            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50">
+            {freeSending ? 'Sending…' : 'Send Free-Form Text'}
+          </button>
+        </div>
+
+        {freeResult && (
+          <div className={`rounded-lg border p-3 text-xs space-y-2
+            ${freeResult.success ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+            <p className={`font-semibold ${freeResult.success ? 'text-green-800' : 'text-red-700'}`}>
+              {freeResult.success
+                ? `✓ Sent! Message ID: ${freeResult.message_id}`
+                : `✗ ${freeResult.error || 'Failed'}`}
+            </p>
+            <details open>
+              <summary className="cursor-pointer text-gray-500 font-medium">Complete raw API response (HTTP {freeResult.httpStatus})</summary>
+              <pre className="mt-2 bg-gray-900 text-green-300 p-3 rounded text-[11px] overflow-x-auto whitespace-pre-wrap">
+                {JSON.stringify(freeResult, null, 2)}
+              </pre>
+            </details>
+          </div>
+        )}
+      </div>
+
       {/* PHP Forwarding setup */}
       <div className="bg-white rounded-2xl border border-gray-200 p-5 space-y-4">
-        <h3 className="font-semibold text-gray-800">3. Receive Incoming Messages (PHP Forwarding)</h3>
+        <h3 className="font-semibold text-gray-800">4. Receive Incoming Messages (PHP Forwarding)</h3>
         <p className="text-sm text-gray-500">
           Your existing webhook at <code className="bg-gray-100 px-1 rounded text-xs">indiajobwork.com/tasks/api/wa_webhook.php</code> stays
           untouched. You just add ~10 lines to it so it forwards a copy of every event to this portal.
