@@ -22,7 +22,7 @@ function extractContent(msg) {
 }
 
 export default async function handler(req, res) {
-  // ── GET: Meta webhook verification ─────────────────────────
+  // ── GET: Meta webhook verification (only needed if using this URL directly) ──
   if (req.method === 'GET') {
     const mode      = req.query['hub.mode']
     const token     = req.query['hub.verify_token']
@@ -44,15 +44,31 @@ export default async function handler(req, res) {
     return res.status(403).send('Forbidden')
   }
 
-  // ── POST: incoming messages + status updates ────────────────
   if (req.method !== 'POST') return res.status(405).send('Method not allowed')
 
-  // Always respond 200 quickly — Meta will retry if we take too long
+  // ── POST: incoming events (forwarded from existing PHP webhook) ──────────
+  // Respond 200 immediately — Meta/PHP forwarder will retry if we're slow
   res.status(200).json({ ok: true })
 
   try {
     const supabaseAdmin = makeAdmin()
     if (!supabaseAdmin) return
+
+    // Validate shared forward secret (if configured in Settings)
+    const { data: rows } = await supabaseAdmin
+      .from('settings').select('key, value')
+      .in('key', ['whatsapp_forward_secret'])
+    const cfg = {}
+    for (const r of (rows || [])) cfg[r.key] = r.value
+
+    const forwardSecret = cfg.whatsapp_forward_secret || ''
+    if (forwardSecret) {
+      const incoming = req.headers['x-forward-secret'] || req.query.secret || ''
+      if (incoming !== forwardSecret) {
+        console.warn('WhatsApp webhook: invalid forward secret — request rejected')
+        return
+      }
+    }
 
     const body = req.body
     if (body.object !== 'whatsapp_business_account') return
@@ -84,7 +100,7 @@ export default async function handler(req, res) {
             wa_timestamp:  waTs,
           }).catch(err => console.error('Failed to insert inbound message:', err.message))
 
-          // Update contact_name on any previous messages from this number if name is now known
+          // Backfill contact_name on earlier messages from this number
           if (contactName) {
             await supabaseAdmin
               .from('whatsapp_messages')
@@ -95,7 +111,7 @@ export default async function handler(req, res) {
           }
         }
 
-        // ── Status updates (delivered, read, failed) ───────────
+        // ── Delivery / read status updates ─────────────────────
         for (const status of value.statuses || []) {
           await supabaseAdmin
             .from('whatsapp_messages')

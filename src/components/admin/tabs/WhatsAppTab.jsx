@@ -287,17 +287,17 @@ function TestPanel() {
   const [testText, setTestText]     = useState('Hello! This is a test message from Aryan Amusements. 🎮')
   const [testResult, setTestResult] = useState(null)
   const [testSending, setTestSending] = useState(false)
-  const [webhookUrl, setWebhookUrl] = useState('')
-  const [verifyToken, setVerifyToken] = useState('')
+  const [forwardUrl, setForwardUrl]     = useState('')
+  const [forwardSecret, setForwardSecret] = useState('')
 
   useEffect(() => {
-    setWebhookUrl(`${window.location.origin}/api/whatsapp-webhook`)
+    setForwardUrl(`${window.location.origin}/api/whatsapp-webhook`)
     supabase.from('settings').select('key, value')
-      .in('key', ['whatsapp_verify_token', 'whatsapp_phone_number_id'])
+      .in('key', ['whatsapp_forward_secret'])
       .then(({ data }) => {
         const map = {}
         for (const r of (data || [])) map[r.key] = r.value
-        setVerifyToken(map.whatsapp_verify_token || '(not set — go to Settings to add it)')
+        setForwardSecret(map.whatsapp_forward_secret || '')
       })
   }, [])
 
@@ -344,8 +344,33 @@ function TestPanel() {
     }
   }
 
-  async function copyWebhookUrl() {
-    await navigator.clipboard.writeText(webhookUrl)
+  async function copySnippet() {
+    await navigator.clipboard.writeText(buildPhpSnippet())
+  }
+
+  function buildPhpSnippet() {
+    const secret = forwardSecret || 'YOUR_FORWARD_SECRET_HERE'
+    return `// ── Forward to China Supplier Portal ──────────────────────
+// Add this to your wa_webhook.php AFTER reading the POST body.
+// If you already read it with json_decode, re-capture it like this:
+//   $raw_body = file_get_contents('php://input');
+// Otherwise add that line at the very top of the file.
+
+$portal_url    = '${forwardUrl}';
+$portal_secret = '${secret}';
+
+$ch = curl_init($portal_url);
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, $raw_body);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'Content-Type: application/json',
+    'X-Forward-Secret: ' . $portal_secret,
+]);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+curl_exec($ch);
+curl_close($ch);
+// ────────────────────────────────────────────────────────────`
   }
 
   return (
@@ -421,40 +446,26 @@ function TestPanel() {
 
         <div className="space-y-3">
           <div>
-            <label className="text-xs font-medium text-gray-600 block mb-1">Webhook URL</label>
+            <label className="text-xs font-medium text-gray-600 block mb-1">Our Webhook URL (for forwarding)</label>
             <div className="flex gap-2">
-              <input readOnly value={webhookUrl}
+              <input readOnly value={forwardUrl}
                 className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono bg-gray-50 text-gray-700" />
-              <button onClick={copyWebhookUrl}
+              <button onClick={copySnippet}
                 className="border border-gray-300 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">
-                Copy
+                Copy PHP
               </button>
             </div>
           </div>
           <div>
-            <label className="text-xs font-medium text-gray-600 block mb-1">Verify Token</label>
-            <input readOnly value={verifyToken}
+            <label className="text-xs font-medium text-gray-600 block mb-1">Forward Secret</label>
+            <input readOnly value={forwardSecret || '(not set — add in Settings → WhatsApp → Webhook Forward Secret)'}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono bg-gray-50 text-gray-700" />
-            <p className="text-xs text-gray-400 mt-1">
-              Set this in <strong>Settings → WhatsApp → Webhook Verify Token</strong>
-            </p>
           </div>
         </div>
 
         <div className="bg-blue-50 rounded-xl p-4 text-xs text-blue-800 space-y-1.5">
-          <p className="font-semibold">How to configure in Meta Developer Portal:</p>
-          <ol className="list-decimal list-inside space-y-1 text-blue-700">
-            <li>Go to <strong>developers.facebook.com</strong> → your App → WhatsApp → Configuration</li>
-            <li>Click <strong>Edit</strong> next to Webhooks</li>
-            <li>Paste the <strong>Webhook URL</strong> above</li>
-            <li>Paste the <strong>Verify Token</strong> above</li>
-            <li>Click <strong>Verify and Save</strong></li>
-            <li>Under Webhook Fields, click <strong>Subscribe</strong> next to <code>messages</code></li>
-          </ol>
-          <p className="text-blue-600 pt-1">
-            Once configured, all incoming customer WhatsApp messages will appear in the Inbox tab in real time.
-            Status updates (delivered, read) are also tracked automatically.
-          </p>
+          <p className="font-semibold">Setup instructions will be shown here once you decide on the approach.</p>
+          <p className="text-blue-600">Use the "Copy PHP" button above to copy the PHP forwarding snippet once your Forward Secret is saved in Settings.</p>
         </div>
       </div>
 

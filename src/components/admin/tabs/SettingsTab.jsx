@@ -58,8 +58,15 @@ const WA_KEYS = [
     key:         'whatsapp_verify_token',
     label:       'Webhook Verify Token',
     placeholder: 'my-secret-verify-token-123',
-    help:        'Any secret string — paste this into Meta Developer Portal → WhatsApp → Configuration → Webhooks → Verify Token',
+    help:        'Only needed if using this portal\'s webhook URL directly with Meta. Leave blank if using PHP forwarding.',
     type:        'text',
+  },
+  {
+    key:         'whatsapp_forward_secret',
+    label:       'Webhook Forward Secret',
+    placeholder: 'any-random-secret-string-123',
+    help:        'A secret string shared between your PHP webhook and this portal. The PHP file sends this to prove the request is genuine.',
+    type:        'password',
   },
 ]
 
