@@ -284,7 +284,7 @@ function TestPanel() {
   const [credStatus, setCredStatus] = useState(null) // null | 'ok' | 'err' | {error}
   const [checking, setChecking]     = useState(false)
   const [testPhone, setTestPhone]   = useState('')
-  const [testText, setTestText]     = useState('Hello! This is a test message from Aryan Amusements. 🎮')
+  const [testText, setTestText]     = useState('')
   const [testResult, setTestResult] = useState(null)
   const [testSending, setTestSending] = useState(false)
   const [forwardUrl, setForwardUrl]     = useState('')
@@ -321,18 +321,27 @@ function TestPanel() {
   }
 
   async function sendTestMessage() {
-    if (!testPhone.trim()) return
+    if (!testPhone.trim() || !testText.trim()) return
     setTestSending(true)
     setTestResult(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
+      // Detect file type from URL extension, default to document
+      const url = testText.trim()
+      const ext = url.split('?')[0].split('.').pop().toLowerCase()
+      const fileType = ['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext) ? 'video'
+                     : ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(ext) ? 'image'
+                     : 'document'
       const res = await fetch('/api/send-whatsapp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
         body: JSON.stringify({
-          to_phone: testPhone,
-          message_text: testText,
-          message_type: 'text',
+          to_phone:     testPhone,
+          file_url:     url,
+          file_type:    fileType,
+          filename:     'test-file.' + ext,
+          machine_name: 'Test',
+          category:     'Aryan Amusements',
         }),
       })
       const data = await res.json()
@@ -396,13 +405,19 @@ curl_close($ch);
         </div>
       </div>
 
-      {/* Send test message */}
+      {/* Send test file — direct send, no template (same as original working approach) */}
       <div className="bg-white rounded-2xl border border-gray-200 p-5 space-y-4">
-        <h3 className="font-semibold text-gray-800">2. Send Test Text Message</h3>
+        <h3 className="font-semibold text-gray-800">2. Send Test File (Direct — No Template)</h3>
         <p className="text-sm text-gray-500">
-          Sends a free-form text. Works only within a 24-hour window after the recipient last messaged you.
-          Use this to confirm the API token is valid.
+          Sends a file directly to the phone — the same approach the original module used and which confirmed working.
+          Paste any publicly accessible image, video, or document URL. Works anytime, no 24-hour restriction.
         </p>
+
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
+          ⚠ <strong>Why not plain text?</strong> WhatsApp blocks free-form text messages unless the recipient has messaged
+          you within the last 24 hours. Use a file URL instead — that works anytime.
+        </div>
+
         <div className="space-y-3">
           <div>
             <label className="text-xs font-medium text-gray-600 block mb-1">Phone (with country code)</label>
@@ -411,14 +426,17 @@ curl_close($ch);
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-green-500 outline-none" />
           </div>
           <div>
-            <label className="text-xs font-medium text-gray-600 block mb-1">Message</label>
-            <textarea value={testText} onChange={e => setTestText(e.target.value)}
-              rows={2}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none resize-none" />
+            <label className="text-xs font-medium text-gray-600 block mb-1">File URL (any public image / video / PDF)</label>
+            <input value={testText} onChange={e => setTestText(e.target.value)}
+              placeholder="https://example.com/sample.jpg"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-green-500 outline-none" />
+            <p className="text-[10px] text-gray-400 mt-1">
+              Tip: right-click any image in the Sales Library → "Copy image address" and paste it here.
+            </p>
           </div>
-          <button onClick={sendTestMessage} disabled={testSending || !testPhone.trim()}
+          <button onClick={sendTestMessage} disabled={testSending || !testPhone.trim() || !testText.trim()}
             className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50">
-            {testSending ? 'Sending…' : 'Send Test Message'}
+            {testSending ? 'Sending…' : 'Send Test File'}
           </button>
         </div>
 
@@ -426,12 +444,13 @@ curl_close($ch);
           <div className={`rounded-lg p-3 text-xs font-mono whitespace-pre-wrap break-all
             ${testResult.success ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
             {testResult.success
-              ? `✓ Sent! Message ID: ${testResult.message_id || 'unknown'}`
-              : `✗ Error:\n${testResult.error || JSON.stringify(testResult, null, 2)}`}
+              ? `✓ Sent! Message ID: ${testResult.message_id || 'unknown'}\n\nIf you don't receive it within 30 seconds, the URL may not be publicly accessible.`
+              : `✗ Error: ${testResult.error || JSON.stringify(testResult, null, 2)}`}
             {testResult.raw && (
-              <div className="mt-2 pt-2 border-t border-red-200 text-gray-600">
-                Raw API response:\n{JSON.stringify(testResult.raw, null, 2)}
-              </div>
+              <details className="mt-2 pt-2 border-t border-red-200">
+                <summary className="cursor-pointer text-gray-500">Raw API response</summary>
+                <pre className="mt-1 text-gray-600">{JSON.stringify(testResult.raw, null, 2)}</pre>
+              </details>
             )}
           </div>
         )}
