@@ -77,55 +77,69 @@ export function enqueue(item) {
 }
 
 // ── Direct upload (single PUT) — for files under DIRECT_THRESHOLD ──────
-async function _startDirect({ uploadId, file, storagePath, accessToken, dbId, bucketName = 'uploads' }) {
+// Faster than TUS for small files: 1 round-trip vs N round-trips (one per chunk).
+// Retries up to 3 times on network failure before reporting an error —
+// this handles China GFW-related drops without needing resumability.
+// If all retries fail, falls back to TUS so the upload is never truly lost.
+async function _startDirect(item) {
+  const { uploadId, file, storagePath, accessToken, dbId, bucketName = 'uploads' } = item
   emit({ type: 'STARTED', uploadId })
-  try {
-    // Report 0% immediately
-    emit({ type: 'PROGRESS', uploadId, pct: 0, bytesUploaded: 0, bytesTotal: file.size, speed: 0, eta: '—' })
+  emit({ type: 'PROGRESS', uploadId, pct: 0, bytesUploaded: 0, bytesTotal: file.size, speed: 0, eta: '—' })
 
-    const res = await fetch(
-      `${SUPABASE_URL}/storage/v1/object/${bucketName}/${storagePath}`,
-      {
-        method:  'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type':  file.type || 'application/octet-stream',
-          'x-upsert':      'true',
-          'apikey':        SUPABASE_ANON,
-        },
-        body: file,
+  const MAX_RETRIES = 3
+  let lastErr = null
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      if (attempt > 1) {
+        const delay = attempt * 1500
+        console.log(`Direct upload retry ${attempt}/${MAX_RETRIES} in ${delay}ms…`)
+        await new Promise(r => setTimeout(r, delay))
       }
-    )
 
-    if (!res.ok) {
-      const txt = await res.text()
-      throw new Error(`Upload failed (${res.status}): ${txt}`)
-    }
+      const t0  = Date.now()
+      const res = await fetch(
+        `${SUPABASE_URL}/storage/v1/object/${bucketName}/${storagePath}`,
+        {
+          method:  'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type':  file.type || 'application/octet-stream',
+            'x-upsert':      'true',
+            'apikey':        SUPABASE_ANON,
+          },
+          body: file,
+        }
+      )
 
-    active.delete(uploadId)
-    running--
-    emit({ type: 'PROGRESS', uploadId, pct: 100, bytesUploaded: file.size, bytesTotal: file.size, speed: 0, eta: '0s' })
-    emit({ type: 'COMPLETE', uploadId, storagePath })
-    tryDequeue()
-
-    if (dbId) {
-      try {
-        await supabase.from('uploads').update({ upload_status: 'completed' }).eq('id', dbId)
-        await supabase.from('processing_queue').insert({ upload_id: dbId, job_type: 'categorize', status: 'pending' })
-      } catch (err) {
-        console.error('Failed to update DB after direct upload:', err)
+      if (!res.ok) {
+        const txt = await res.text()
+        throw new Error(`HTTP ${res.status}: ${txt}`)
       }
+
+      const speed = file.size / ((Date.now() - t0) / 1000)
+      active.delete(uploadId)
+      running--
+      emit({ type: 'PROGRESS', uploadId, pct: 100, bytesUploaded: file.size, bytesTotal: file.size, speed, eta: '0s' })
+      emit({ type: 'COMPLETE', uploadId, storagePath })
+      tryDequeue()
+
+      if (dbId) {
+        try {
+          await supabase.from('uploads').update({ upload_status: 'completed' }).eq('id', dbId)
+          await supabase.from('processing_queue').insert({ upload_id: dbId, job_type: 'categorize', status: 'pending' })
+        } catch (err) { console.error('DB update after direct upload failed:', err) }
+      }
+      return  // success
+
+    } catch (err) {
+      lastErr = err
     }
-  } catch (err) {
-    active.delete(uploadId)
-    running--
-    const msg = err.message || String(err)
-    emit({ type: 'ERROR', uploadId, error: msg })
-    if (dbId) {
-      supabase.from('uploads').update({ upload_status: 'failed', error_message: msg }).eq('id', dbId).then(() => {})
-    }
-    tryDequeue()
   }
+
+  // All retries failed — fall back to TUS which can resume on a future run
+  console.warn(`Direct upload failed after ${MAX_RETRIES} retries — falling back to TUS:`, lastErr?.message)
+  _startTus(item)
 }
 
 // ── TUS upload (resumable) — for files over DIRECT_THRESHOLD ────────────
