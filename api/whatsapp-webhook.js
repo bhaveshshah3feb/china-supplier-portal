@@ -118,10 +118,18 @@ export default async function handler(req, res) {
 
         // ── Delivery / read status updates ─────────────────────
         for (const status of value.statuses || []) {
+          const deliveryStatus = status.status  // sent, delivered, read, failed
+          const errorMsg = status.errors?.length
+            ? `(${status.errors[0].code}) ${status.errors[0].title}`
+            : null
+          if (errorMsg) console.error('WA delivery failed:', status.id, errorMsg)
           try {
             await supabaseAdmin
               .from('whatsapp_messages')
-              .update({ status: status.status })
+              .update({
+                status:        deliveryStatus,
+                error_message: errorMsg || null,
+              })
               .eq('wa_message_id', status.id)
           } catch (err) {
             console.error('Failed to update status:', err.message)

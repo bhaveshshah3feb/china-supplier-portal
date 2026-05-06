@@ -29,10 +29,19 @@ async function uploadMediaToWhatsApp(fileUrl, phoneNumberId, accessToken) {
   const contentType = dl.headers.get('content-type') || 'image/jpeg'
   const buffer      = await dl.arrayBuffer()
 
+  // WhatsApp MIME detection relies on the filename extension — 'media' (no ext) causes "UNKNOWN"
+  const ext = contentType.includes('png')  ? 'png'
+            : contentType.includes('webp') ? 'webp'
+            : contentType.includes('gif')  ? 'gif'
+            : contentType.includes('mp4')  ? 'mp4'
+            : contentType.includes('pdf')  ? 'pdf'
+            : 'jpg'
+  const uploadFilename = `upload.${ext}`
+
   const form = new FormData()
   form.append('messaging_product', 'whatsapp')
   form.append('type', contentType)
-  form.append('file', new Blob([buffer], { type: contentType }), 'media')
+  form.append('file', new Blob([buffer], { type: contentType }), uploadFilename)
 
   const up   = await fetch(`${WA_API}/${phoneNumberId}/media`, {
     method:  'POST',
@@ -42,7 +51,7 @@ async function uploadMediaToWhatsApp(fileUrl, phoneNumberId, accessToken) {
   })
   const data = await up.json()
   if (!data.id) throw new Error(`WhatsApp media upload failed: ${data.error?.message || JSON.stringify(data)}`)
-  console.log('WA media upload ok, id:', data.id, '| content-type:', contentType)
+  console.log('WA media upload ok, id:', data.id, '| type:', contentType, '| filename:', uploadFilename)
   return data.id
 }
 
@@ -174,7 +183,7 @@ export default async function handler(req, res) {
         messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
         type: 'template',
         template: {
-          name: templateName, language: { code: 'en' },
+          name: templateName, language: { code: 'en_US' },
           components: [
             { type: 'header', parameters: [videoParam] },
             { type: 'body',   parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
@@ -200,7 +209,7 @@ export default async function handler(req, res) {
         messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
         type: 'template',
         template: {
-          name: templateName, language: { code: 'en' },
+          name: templateName, language: { code: 'en_US' },
           components: [
             { type: 'header', parameters: [imageParam] },
             { type: 'body',   parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
