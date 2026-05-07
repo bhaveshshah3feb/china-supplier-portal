@@ -15,7 +15,13 @@ export default function ProtectedRoute({ children, requireRole }) {
       if (!mounted) return
 
       if (!info) { setState('no-role'); return }
-      if (requireRole && info.role !== requireRole) { setState('wrong-role'); return }
+      if (requireRole && info.role !== requireRole) {
+        // Staff can also access the admin dashboard
+        if (requireRole === 'admin' && info.role === 'staff') {
+          setState('ok'); return
+        }
+        setState('wrong-role'); return
+      }
       setState('ok')
     }
     check()

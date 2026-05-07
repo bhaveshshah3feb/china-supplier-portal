@@ -11,18 +11,20 @@ import SalesLibraryTab from './tabs/SalesLibraryTab'
 import SettingsTab     from './tabs/SettingsTab'
 import RenameTab      from './tabs/RenameTab'
 import WhatsAppTab    from './tabs/WhatsAppTab'
+import UsersTab       from './tabs/UsersTab'
 
-const TABS = [
-  { key: 'overview',     icon: '📊', label: 'Overview' },
-  { key: 'library',      icon: '✅', label: 'Sales Library' },
-  { key: 'whatsapp',     icon: '💬', label: 'WhatsApp' },
-  { key: 'rename',       icon: '✏️',  label: 'Rename / Edit' },
-  { key: 'suppliers',    icon: '🏭', label: 'Suppliers' },
-  { key: 'uploads',      icon: '📁', label: 'Uploads' },
-  { key: 'processing',   icon: '⚙️',  label: 'Processing' },
-  { key: 'categories',   icon: '🗂️',  label: 'Categories' },
-  { key: 'logs',         icon: '📋', label: 'Processing Log' },
-  { key: 'settings',     icon: '⚙',  label: 'Settings' },
+const ALL_TABS = [
+  { key: 'overview',     icon: '📊', label: 'Overview',        adminOnly: false },
+  { key: 'library',      icon: '✅', label: 'Sales Library',   adminOnly: false },
+  { key: 'whatsapp',     icon: '💬', label: 'WhatsApp',         adminOnly: false },
+  { key: 'rename',       icon: '✏️',  label: 'Rename / Edit',  adminOnly: false },
+  { key: 'suppliers',    icon: '🏭', label: 'Suppliers',        adminOnly: false },
+  { key: 'uploads',      icon: '📁', label: 'Uploads',          adminOnly: false },
+  { key: 'processing',   icon: '⚙️',  label: 'Processing',     adminOnly: false },
+  { key: 'categories',   icon: '🗂️',  label: 'Categories',     adminOnly: false },
+  { key: 'logs',         icon: '📋', label: 'Processing Log',   adminOnly: false },
+  { key: 'settings',     icon: '⚙',  label: 'Settings',         adminOnly: false },
+  { key: 'users',        icon: '👥', label: 'Users',             adminOnly: true  },
 ]
 
 function fmtBytes(b) {
@@ -37,6 +39,33 @@ export default function AdminDashboard() {
   const [stats, setStats]       = useState(null)
   const [recentUploads, setRecentUploads] = useState([])
   const [loadingStats, setLoadingStats]   = useState(true)
+  const [isAdmin, setIsAdmin]   = useState(true)
+  const [staffPerms, setStaffPerms] = useState(null)
+
+  useEffect(() => {
+    async function checkRole() {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user?.user_metadata?.role === 'staff') {
+        setIsAdmin(false)
+        const { data } = await supabase
+          .from('staff_users')
+          .select('permissions')
+          .eq('auth_user_id', user.id)
+          .maybeSingle()
+        const perms = data?.permissions || {}
+        setStaffPerms(perms)
+        // Land on first permitted tab
+        const first = ALL_TABS.find(t => !t.adminOnly && perms[t.key])
+        if (first) setTab(first.key)
+      }
+    }
+    checkRole()
+  }, [])
+
+  // Tabs visible to this user
+  const TABS = isAdmin
+    ? ALL_TABS
+    : ALL_TABS.filter(t => !t.adminOnly && staffPerms?.[t.key] === true)
 
   useEffect(() => {
     if (tab === 'overview') loadStats()
@@ -89,7 +118,7 @@ export default function AdminDashboard() {
       {/* Tab bar */}
       <div className="bg-white border-b border-gray-200 px-4">
         <nav className="flex gap-0 max-w-7xl mx-auto overflow-x-auto">
-          {TABS.map(({ key, icon, label }) => (
+          {TABS.map(({ key, icon, label, adminOnly }) => (
             <button key={key} onClick={() => setTab(key)}
               className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors
                 ${tab === key ? 'border-red-600 text-red-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
@@ -268,6 +297,7 @@ export default function AdminDashboard() {
         {tab === 'library'    && <SalesLibraryTab />}
         {tab === 'whatsapp'   && <WhatsAppTab />}
         {tab === 'rename'     && <RenameTab />}
+        {tab === 'users'      && <UsersTab />}
         {tab === 'suppliers'  && <SuppliersTab />}
         {tab === 'uploads'    && <UploadsTab />}
         {tab === 'processing' && <ProcessingTab />}

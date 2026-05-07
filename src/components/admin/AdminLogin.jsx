@@ -20,11 +20,10 @@ export default function AdminLogin() {
     })
     if (authErr) { setError(authErr.message); setLoading(false); return }
 
-    // Check role directly from the sign-in response — no DB query needed
     const userRole = data.user?.user_metadata?.role
-    if (userRole !== 'admin') {
+    if (userRole !== 'admin' && userRole !== 'staff') {
       await supabase.auth.signOut()
-      setError(t('auth.notAdmin') + ` (role: ${userRole || 'none'})`)
+      setError('Access denied. This portal is for admin and staff only.')
       setLoading(false)
       return
     }

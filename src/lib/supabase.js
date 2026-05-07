@@ -43,13 +43,39 @@ export async function getUploadSignedUrl(path) {
 // ── Role helpers ──────────────────────────────────────────────
 
 export async function getSessionRole(userId) {
-  // Primary check: role in Auth user metadata (set via SQL, embedded in JWT)
   const { data: { user } } = await supabase.auth.getUser()
+
+  // Admin — from JWT metadata
   if (user?.user_metadata?.role === 'admin') {
     return { role: 'admin' }
   }
 
-  // Fallback: check suppliers table
+  // Staff — from staff_users table (supports both invited and active)
+  if (user?.user_metadata?.role === 'staff') {
+    const { data: staff } = await supabase
+      .from('staff_users')
+      .select('permissions, name, email, status')
+      .eq('auth_user_id', userId)
+      .in('status', ['active', 'invited'])
+      .maybeSingle()
+    if (staff) {
+      // Activate on first real login
+      if (staff.status === 'invited') {
+        supabase.from('staff_users')
+          .update({ status: 'active', last_login: new Date().toISOString() })
+          .eq('auth_user_id', userId)
+          .then(() => {})
+      } else {
+        supabase.from('staff_users')
+          .update({ last_login: new Date().toISOString() })
+          .eq('auth_user_id', userId)
+          .then(() => {})
+      }
+      return { role: 'staff', permissions: staff.permissions || {}, name: staff.name }
+    }
+  }
+
+  // Supplier — from suppliers table
   const { data: supplier } = await supabase
     .from('suppliers')
     .select('status, supplier_code')
