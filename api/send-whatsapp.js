@@ -167,37 +167,27 @@ export default async function handler(req, res) {
     let payload, templateName = null, msgContent = null
 
     if (file_type === 'video') {
-      templateName = 'game_vidpic'
-      msgContent   = `Here's the video for ${name1} — ${name2}`
-      // Template is text-only (no video header) — body params only
+      msgContent = `${name1} — ${name2}`
+      // Upload to WhatsApp media servers, then send directly as type:video
+      const mediaId = await uploadMediaToWhatsApp(file_url, phoneNumberId, accessToken)
       payload = {
         messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
-        type: 'template',
-        template: {
-          name: templateName, language: { code: 'en' },
-          components: [
-            { type: 'body', parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
-          ],
-        },
+        type: 'video',
+        video: { id: mediaId, caption: msgContent },
       }
 
     } else if (file_type === 'image') {
-      templateName = 'game_pic'
-      msgContent   = `Here's the image for ${name1} — ${name2}`
-      // Template is text-only (no image header) — body params only
+      msgContent = `${name1} — ${name2}`
+      // Upload to WhatsApp media servers, then send directly as type:image
+      const mediaId = await uploadMediaToWhatsApp(file_url, phoneNumberId, accessToken)
       payload = {
         messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
-        type: 'template',
-        template: {
-          name: templateName, language: { code: 'en' },
-          components: [
-            { type: 'body', parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
-          ],
-        },
+        type: 'image',
+        image: { id: mediaId, caption: msgContent },
       }
 
     } else {
-      // Document — send directly (no template needed)
+      // Document — send directly with link
       msgContent = `${name1} — ${name2}`
       payload = {
         messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
