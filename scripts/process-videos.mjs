@@ -40,7 +40,7 @@ const fontArg = hasBoldFont ? `:fontfile=${BOLD_FONT}` : ''
 
 // Probe brand logo dimensions at startup so overlays preserve its native aspect ratio
 let LOGO_W_NATIVE = 0, LOGO_H_NATIVE = 0
-if (hasLogo) {
+if (existsSync(LOGO_PATH)) {
   try {
     const ldim = execSync(
       `ffprobe -v error -show_entries stream=width,height -of csv=p=0 "${LOGO_PATH}"`,
