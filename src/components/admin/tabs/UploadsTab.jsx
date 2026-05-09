@@ -91,6 +91,7 @@ export default function UploadsTab() {
   const [triggerMsg, setTriggerMsg]   = useState(null) // { type: 'ok'|'err', text }
   const [selected, setSelected]       = useState(new Set())
   const [deleting, setDeleting]       = useState(false)
+  const [reprocessing, setReprocessing] = useState(false)
 
   useEffect(() => { load() }, [filter])
 
@@ -186,6 +187,65 @@ export default function UploadsTab() {
     }
   }
 
+  async function reprocessSelected() {
+    const count = selected.size
+    if (!window.confirm(`Reprocess ${count} file${count !== 1 ? 's' : ''}? This will re-run AI categorization and watermarking from scratch.`)) return
+    setReprocessing(true)
+    const ids = [...selected]
+    let succeeded = 0, failed = 0
+
+    for (const id of ids) {
+      const upload = uploads.find(u => u.id === id)
+      if (!upload) continue
+      try {
+        // Clear existing queue entries
+        await supabase.from('processing_queue').delete().eq('upload_id', id)
+        // Remove stale sales file so it gets regenerated
+        if (upload.sales_path) {
+          try { await supabase.storage.from('sales').remove([upload.sales_path]) } catch {}
+        }
+        // Reset upload back to pending, clear supplier logo so it gets re-detected
+        const { error } = await supabase.from('uploads').update({
+          processing_status: 'pending',
+          sales_path: null,
+          supplier_logo_region: null,
+        }).eq('id', id)
+        if (error) throw new Error(error.message)
+        // Queue fresh categorize job
+        const { error: qErr } = await supabase.from('processing_queue').insert({
+          upload_id: id, job_type: 'categorize', status: 'pending',
+        })
+        if (qErr) throw new Error(qErr.message)
+        succeeded++
+      } catch (err) {
+        console.error('Failed to requeue upload', id, err.message)
+        failed++
+      }
+    }
+
+    // Fire GitHub Actions to pick up the new jobs
+    if (succeeded > 0) {
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        await fetch('/api/trigger-processing', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${session?.access_token}` },
+        })
+      } catch {}
+    }
+
+    setReprocessing(false)
+    clearSelection()
+    await load()
+
+    if (failed > 0) {
+      alert(`${succeeded} file(s) queued. ${failed} failed — check browser console.`)
+    } else {
+      setTriggerMsg({ type: 'ok', text: `${succeeded} file${succeeded !== 1 ? 's' : ''} queued for reprocessing — GitHub Actions will start shortly.` })
+      setTimeout(() => setTriggerMsg(null), 8000)
+    }
+  }
+
   async function deleteSelected() {
     if (!window.confirm(`Delete ${selected.size} file${selected.size !== 1 ? 's' : ''}? This cannot be undone.`)) return
     setDeleting(true)
@@ -240,10 +300,16 @@ export default function UploadsTab() {
         </button>
         <div className="ml-auto flex items-center gap-3 flex-wrap">
           {selected.size > 0 && (
-            <button onClick={deleteSelected} disabled={deleting}
-              className="bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-200 disabled:opacity-50 transition-colors flex items-center gap-1.5">
-              {deleting ? '⏳ Deleting…' : `🗑 Delete Selected (${selected.size})`}
-            </button>
+            <>
+              <button onClick={reprocessSelected} disabled={reprocessing || deleting}
+                className="bg-blue-100 text-blue-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-200 disabled:opacity-50 transition-colors flex items-center gap-1.5">
+                {reprocessing ? '⏳ Requeueing…' : `🔄 Reprocess (${selected.size})`}
+              </button>
+              <button onClick={deleteSelected} disabled={deleting || reprocessing}
+                className="bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-200 disabled:opacity-50 transition-colors flex items-center gap-1.5">
+                {deleting ? '⏳ Deleting…' : `🗑 Delete (${selected.size})`}
+              </button>
+            </>
           )}
           <button onClick={triggerProcessing} disabled={triggering}
             className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors flex items-center gap-2">
