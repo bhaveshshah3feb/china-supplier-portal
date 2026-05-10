@@ -86,7 +86,7 @@ function calcWM(vidW, vidH) {
 
   const logoBoxW = logoDisplayW + 2 * logoPad
   const textX    = logoBoxW + logoPad
-  const textW    = Math.round(vidW * 0.28)
+  const textW    = vidW - logoBoxW          // spans full remaining width to right edge
   const phoneFs  = Math.round(bandH * 0.28)
   const nameFs   = Math.round(bandH * 0.17)
   const srcH     = Math.round(bandH * 0.38)
@@ -113,7 +113,7 @@ async function detectSupplierLogo(frames, mimeType = 'image/jpeg') {
           role: 'user',
           content: [
             { type: 'image', source: { type: 'base64', media_type: mimeType, data: readFileSync(frame).toString('base64') } },
-            { type: 'text', text: `Examine this amusement/arcade machine image for any manufacturer or supplier branding: logos, stickers, company names printed on the cabinet body. Do NOT report the game title on the main display screen. Ignore "Aryan Amusements" completely. If you see third-party supplier branding that should be concealed, reply ONLY with JSON (no markdown): {"found":true,"x_pct":X,"y_pct":Y,"w_pct":W,"h_pct":H,"confidence":0.0} where all values are % of frame dimensions. If no supplier branding: {"found":false}` },
+            { type: 'text', text: `Examine this amusement/arcade machine image for manufacturer or supplier branding that must be concealed. Look for: company logos (often large and centered on the cabinet), brand names, stickers, "TECHNOLOGY" company names (e.g. UNIS, IGS, ICE, SEGA, NAMCO, KONAMI etc.), or any manufacturer text on the machine body or attract screen. Ignore "Aryan Amusements". Ignore the game title/name displayed on screen. If branding found, reply ONLY with JSON (no markdown): {"found":true,"x_pct":X,"y_pct":Y,"w_pct":W,"h_pct":H,"confidence":0.0} as % of frame. If none: {"found":false}` },
           ],
         }],
       })
