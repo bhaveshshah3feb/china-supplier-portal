@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Login            from './components/auth/Login'
 import Register         from './components/auth/Register'
 import Verify           from './components/auth/Verify'
+import GuestLanding     from './components/auth/GuestLanding'
 import SupplierDashboard from './components/dashboard/SupplierDashboard'
 import AdminLogin       from './components/admin/AdminLogin'
 import AdminDashboard   from './components/admin/AdminDashboard'
@@ -16,6 +17,7 @@ export default function App() {
         <Route path="/login"         element={<Login />} />
         <Route path="/register"      element={<Register />} />
         <Route path="/verify"        element={<Verify />} />
+        <Route path="/u/:token"      element={<GuestLanding />} />
         <Route path="/admin/login"   element={<AdminLogin />} />
 
         {/* Supplier protected */}

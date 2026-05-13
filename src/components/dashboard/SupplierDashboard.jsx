@@ -40,8 +40,20 @@ export default function SupplierDashboard() {
   const [tab,      setTab]        = useState('upload')
   const [loading,  setLoading]    = useState(true)
   const [loadErr,  setLoadErr]    = useState(null)
+  const [showProfilePanel, setShowProfilePanel] = useState(false)
+  const [profileForm, setProfileForm] = useState({ company_name_en: '', company_name_zh: '', email: '', phone: '' })
+  const [profileSaving, setProfileSaving] = useState(false)
+  const [profileMsg, setProfileMsg] = useState(null)
+  const [personalLink, setPersonalLink] = useState(null)
+  const [personalLinkDismissed, setPersonalLinkDismissed] = useState(false)
 
   useEffect(() => {
+    // Check for personal link from guest landing (open link flow)
+    const pt = localStorage.getItem('guestPersonalToken')
+    if (pt) {
+      setPersonalLink(`${window.location.origin}/u/${pt}`)
+      localStorage.removeItem('guestPersonalToken')
+    }
     load()
     // Realtime: UPDATE refreshes status on existing rows, INSERT adds new uploads
     const ch = supabase.channel('supplier_uploads')
@@ -74,11 +86,42 @@ export default function SupplierDashboard() {
 
       setSupplier(sup)
       setUploads(ups || [])
+      // Show profile panel for guest suppliers who haven't completed their profile
+      if (sup && (!sup.company_name_en || !sup.email || sup.email?.endsWith('@upload.internal'))) {
+        setShowProfilePanel(true)
+        setProfileForm({
+          company_name_en: sup.company_name_en || '',
+          company_name_zh: sup.company_name_zh || '',
+          email: (sup.email?.endsWith('@upload.internal') ? '' : sup.email) || '',
+          phone: sup.phone || '',
+        })
+      }
     } catch (e) {
       console.error('load() failed:', e)
       setLoadErr(e.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function saveProfile() {
+    setProfileSaving(true); setProfileMsg(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/update-supplier-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify(profileForm),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Save failed')
+      setProfileMsg({ type: 'ok', text: 'Profile saved!' })
+      setSupplier(s => ({ ...s, ...profileForm }))
+      setTimeout(() => { setShowProfilePanel(false); setProfileMsg(null) }, 1500)
+    } catch (err) {
+      setProfileMsg({ type: 'err', text: err.message })
+    } finally {
+      setProfileSaving(false)
     }
   }
 
@@ -117,6 +160,79 @@ export default function SupplierDashboard() {
           ))}
         </nav>
       </div>
+
+      {/* ── Personal link banner (shown once after open-link first visit) ── */}
+      {personalLink && !personalLinkDismissed && (
+        <div className="bg-blue-600 text-white px-4 py-3">
+          <div className="max-w-5xl mx-auto flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2 text-sm">
+              <span>🔖</span>
+              <span className="font-medium">Bookmark your personal upload link</span>
+              <span className="text-blue-200 hidden sm:inline">— use it to return and upload more files anytime</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono bg-blue-700 px-2 py-1 rounded text-blue-100 truncate max-w-xs">{personalLink}</span>
+              <button onClick={() => { navigator.clipboard.writeText(personalLink) }}
+                className="text-xs bg-white text-blue-700 font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-50 transition-colors whitespace-nowrap">
+                Copy Link
+              </button>
+              <button onClick={() => setPersonalLinkDismissed(true)} className="text-blue-300 hover:text-white text-lg leading-none">×</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Profile completion panel (slide-up) ── */}
+      {showProfilePanel && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-4">
+          <div className="max-w-5xl mx-auto">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <p className="text-sm font-semibold text-amber-800">Complete your profile <span className="font-normal text-amber-600">(takes 1 min)</span></p>
+                <p className="text-xs text-amber-600 mt-0.5">Your files are uploading — add your details so we can label them correctly.</p>
+              </div>
+              <button onClick={() => setShowProfilePanel(false)} className="text-amber-400 hover:text-amber-600 text-lg leading-none flex-shrink-0">×</button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <input value={profileForm.company_name_en}
+                onChange={e => setProfileForm(f => ({ ...f, company_name_en: e.target.value }))}
+                className="border border-amber-300 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:ring-2 focus:ring-amber-400"
+                placeholder="Company Name (EN)" />
+              <input value={profileForm.company_name_zh}
+                onChange={e => setProfileForm(f => ({ ...f, company_name_zh: e.target.value }))}
+                className="border border-amber-300 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:ring-2 focus:ring-amber-400"
+                placeholder="公司名称（中文）" />
+              <input type="email" value={profileForm.email}
+                onChange={e => setProfileForm(f => ({ ...f, email: e.target.value }))}
+                className="border border-amber-300 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:ring-2 focus:ring-amber-400"
+                placeholder="Email address" />
+              <input type="tel" value={profileForm.phone}
+                onChange={e => setProfileForm(f => ({ ...f, phone: e.target.value }))}
+                className="border border-amber-300 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:ring-2 focus:ring-amber-400"
+                placeholder="WhatsApp number" />
+            </div>
+            <div className="flex items-center gap-3 mt-3">
+              <button onClick={saveProfile} disabled={profileSaving}
+                className="bg-amber-600 text-white text-sm font-semibold px-5 py-2 rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-60 flex items-center gap-2">
+                {profileSaving ? <><span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Saving…</> : 'Save'}
+              </button>
+              {profileMsg && (
+                <span className={`text-sm ${profileMsg.type === 'ok' ? 'text-green-700' : 'text-red-600'}`}>
+                  {profileMsg.type === 'ok' ? '✓ ' : '✗ '}{profileMsg.text}
+                </span>
+              )}
+              <button onClick={() => setShowProfilePanel(false)} className="text-xs text-amber-600 hover:underline ml-auto">
+                Maybe later
+              </button>
+            </div>
+            {profileForm.email && (
+              <p className="text-[11px] text-amber-500 mt-2">
+                Adding your email lets you log in with a code next time — no need to keep the link.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 max-w-5xl mx-auto w-full px-4 py-6 space-y-5">
 
@@ -258,27 +374,64 @@ export default function SupplierDashboard() {
 
         {/* ── Account Tab ── */}
         {tab === 'account' && (
-          <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-5 max-w-lg">
-            <h3 className="font-semibold text-gray-800">{isZh ? '账户信息' : 'Account Information'}</h3>
-            <div className="space-y-3">
-              {[
-                { label: isZh ? '供应商编码' : 'Supplier Code', value: supplier?.supplier_code, mono: true },
-                { label: isZh ? '公司名称（英文）' : 'Company (English)', value: supplier?.company_name_en },
-                { label: isZh ? '公司名称（中文）' : 'Company (Chinese)', value: supplier?.company_name_zh },
-                { label: isZh ? '电话' : 'Phone', value: supplier?.phone },
-                { label: isZh ? '账户状态' : 'Account Status', value: supplier?.status },
-              ].map(({ label, value, mono }) => (
-                <div key={label} className="flex justify-between items-center py-2 border-b border-gray-50">
-                  <span className="text-sm text-gray-500">{label}</span>
-                  <span className={`text-sm font-medium text-gray-800 ${mono ? 'font-mono' : ''}`}>{value || '—'}</span>
+          <div className="space-y-4 max-w-lg">
+            <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-4">
+              <h3 className="font-semibold text-gray-800">{isZh ? '账户信息' : 'Account Information'}</h3>
+              <div className="flex justify-between items-center py-2 border-b border-gray-50">
+                <span className="text-sm text-gray-500">{isZh ? '供应商编码' : 'Supplier Code'}</span>
+                <span className="text-sm font-mono font-medium text-gray-800">{supplier?.supplier_code}</span>
+              </div>
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">{isZh ? '公司名称（英文）' : 'Company (English)'}</label>
+                    <input value={profileForm.company_name_en}
+                      onChange={e => setProfileForm(f => ({ ...f, company_name_en: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-400"
+                      placeholder={isZh ? '公司英文名' : 'Company English name'} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">{isZh ? '公司名称（中文）' : 'Company (Chinese)'}</label>
+                    <input value={profileForm.company_name_zh}
+                      onChange={e => setProfileForm(f => ({ ...f, company_name_zh: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-400"
+                      placeholder="公司中文名" />
+                  </div>
                 </div>
-              ))}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">{isZh ? '邮箱' : 'Email'}</label>
+                    <input type="email" value={profileForm.email}
+                      onChange={e => setProfileForm(f => ({ ...f, email: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-400"
+                      placeholder="email@company.com" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">{isZh ? 'WhatsApp' : 'Phone / WhatsApp'}</label>
+                    <input type="tel" value={profileForm.phone}
+                      onChange={e => setProfileForm(f => ({ ...f, phone: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-400"
+                      placeholder="+86 138 0000 0000" />
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <button onClick={saveProfile} disabled={profileSaving}
+                  className="bg-brand-600 text-white text-sm font-semibold px-5 py-2 rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-60 flex items-center gap-2">
+                  {profileSaving ? <><span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" /> {isZh ? '保存中…' : 'Saving…'}</> : (isZh ? '保存' : 'Save Changes')}
+                </button>
+                {profileMsg && (
+                  <span className={`text-sm ${profileMsg.type === 'ok' ? 'text-green-700' : 'text-red-600'}`}>
+                    {profileMsg.type === 'ok' ? '✓ ' : '✗ '}{profileMsg.text}
+                  </span>
+                )}
+              </div>
+              {profileForm.email && !supplier?.email?.endsWith('@upload.internal') && (
+                <p className="text-xs text-gray-400">
+                  {isZh ? '保存邮箱后，下次可通过邮箱验证码登录。' : 'Once email is saved, you can also log in with an email code next time.'}
+                </p>
+              )}
             </div>
-            <p className="text-xs text-gray-400">
-              {isZh
-                ? '如需修改账户信息，请联系管理员：+91 9841081945'
-                : 'To update account details, contact admin: +91 9841081945'}
-            </p>
           </div>
         )}
 
