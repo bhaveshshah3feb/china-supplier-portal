@@ -170,12 +170,12 @@ export default async function handler(req, res) {
     const supabaseAdmin = makeAdmin()
     if (!supabaseAdmin) return
 
-    // Validate shared forward secret (if configured in Settings)
-    const { data: rows } = await supabaseAdmin
+    // Load all needed settings in one query
+    const { data: settingsRows } = await supabaseAdmin
       .from('settings').select('key, value')
-      .in('key', ['whatsapp_forward_secret'])
+      .in('key', ['whatsapp_forward_secret', 'whatsapp_phone_number_id', 'whatsapp_access_token', 'admin_whatsapp_number'])
     const cfg = {}
-    for (const r of (rows || [])) cfg[r.key] = r.value
+    for (const r of (settingsRows || [])) cfg[r.key] = r.value
 
     const forwardSecret = cfg.whatsapp_forward_secret || ''
     if (forwardSecret) {
@@ -188,13 +188,6 @@ export default async function handler(req, res) {
 
     const body = req.body
     if (body.object !== 'whatsapp_business_account') return
-
-    // Load WA credentials + admin phone number once per webhook call
-    const { data: settingsRows } = await supabaseAdmin
-      .from('settings').select('key, value')
-      .in('key', ['whatsapp_phone_number_id', 'whatsapp_access_token', 'admin_whatsapp_number'])
-    const cfg = {}
-    for (const r of (settingsRows || [])) cfg[r.key] = r.value
     const waPhoneId    = cfg.whatsapp_phone_number_id || ''
     const waToken      = cfg.whatsapp_access_token    || ''
     // Admin phone: strip non-digits, also support "919841081945" without "+"
