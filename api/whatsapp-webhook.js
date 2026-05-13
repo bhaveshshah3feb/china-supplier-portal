@@ -41,7 +41,7 @@ function parseAdminMsg(text) {
   const t = (text || '').trim()
   const lower = t.toLowerCase()
 
-  if (!t || ['link','open','new link','open link','broadcast','alink'].includes(lower)) {
+  if (!t || ['link','open','new link','open link','broadcast'].includes(lower)) {
     return { companyName: '', contactPerson: '', phone: '', isOpen: true }
   }
 
@@ -242,14 +242,15 @@ export default async function handler(req, res) {
             } catch {}
           }
 
-          // ── Admin command: "alink" from 919841081945 → generate upload link ──
+          // ── Admin command: "link" word from 919841081945 → generate upload link ──
           // Security: ONLY process if sender is the admin's number (919841081945)
           const isAdminPhone = phone.replace(/[^\d]/g, '') === adminPhone
-          const hasAlinkKeyword = msg.type === 'text' && content.toLowerCase().includes('alink')
+          const hasLinkKeyword = msg.type === 'text' && /\blink\b/i.test(content)
 
-          if (hasAlinkKeyword && isAdminPhone && waPhoneId && waToken) {
+          if (hasLinkKeyword && isAdminPhone && waPhoneId && waToken) {
             try {
-              const stripped = content.replace(/alink\s*/i, '').trim()
+              // Strip the word "link" and trim to get company/contact info
+              const stripped = content.replace(/\blink\b/gi, '').trim()
               const { companyName, contactPerson, phone: supplierPhone, isOpen } = parseAdminMsg(stripped || 'link')
 
               const { data: adminRows } = await supabaseAdmin.from('admins').select('id').limit(1)
@@ -292,9 +293,9 @@ export default async function handler(req, res) {
               await sendWaText(waPhoneId, waToken, phone, `❌ Could not create link: ${cmdErr.message}`)
             }
 
-          } else if (hasAlinkKeyword && !isAdminPhone) {
-            // Someone else sent "alink" — ignore silently (do not generate a link)
-            console.log(`"alink" received from non-admin number ${phone} — ignored`)
+          } else if (hasLinkKeyword && !isAdminPhone) {
+            // Someone else sent "link" — ignore silently (do not generate a link)
+            console.log(`"link" keyword received from non-admin number ${phone} — ignored`)
           }
         }
 
