@@ -34,8 +34,8 @@ function parseAdminMsg(text) {
   const t = (text || '').trim()
   const lower = t.toLowerCase()
 
-  // "link", "open", "new link", "open link" → generic/broadcast link
-  if (!t || ['link','open','new link','open link','broadcast'].includes(lower)) {
+  // bare keyword or "open" → generic/broadcast link
+  if (!t || ['link','open','new link','open link','broadcast','alink'].includes(lower)) {
     return { companyName: '', phone: '', isOpen: true }
   }
 
@@ -212,10 +212,14 @@ export default async function handler(req, res) {
             } catch {}
           }
 
-          // ── Admin command: message from Bhavesh → generate upload link ──
-          if (msg.type === 'text' && phone.replace(/[^\d]/g, '') === adminPhone && waPhoneId && waToken) {
+          // ── Admin command: "alink" keyword → generate upload link ──
+          const isAdminPhone = phone.replace(/[^\d]/g, '') === adminPhone
+          const hasAlinkKeyword = msg.type === 'text' && content.toLowerCase().includes('alink')
+          if (hasAlinkKeyword && isAdminPhone && waPhoneId && waToken) {
             try {
-              const { companyName, phone: supplierPhone, isOpen } = parseAdminMsg(content)
+              // Strip the "alink" keyword before parsing the rest as company name
+              const stripped = content.replace(/alink\s*/i, '').trim()
+              const { companyName, phone: supplierPhone, isOpen } = parseAdminMsg(stripped || 'link')
 
               // Look up admin record (created_by field)
               const { data: adminRows } = await supabaseAdmin.from('admins').select('id').limit(1)
