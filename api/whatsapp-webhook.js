@@ -29,26 +29,54 @@ async function sendWaText(phoneNumberId, accessToken, toPhone, text) {
   }
 }
 
-// Parse what Bhavesh typed: returns { companyName, phone, isOpen }
+// Parse what Bhavesh typed after stripping "alink".
+// Formats supported (comma-separated):
+//   alink                           → open/broadcast link
+//   alink UNIS Technology           → company only
+//   alink UNIS, Jim                 → company + contact person
+//   alink UNIS, Jim, +86138...      → company + contact + phone
+//   alink UNIS +86138...            → company + phone (no contact)
+// Returns { companyName, contactPerson, phone, isOpen }
 function parseAdminMsg(text) {
   const t = (text || '').trim()
   const lower = t.toLowerCase()
 
-  // bare keyword or "open" → generic/broadcast link
   if (!t || ['link','open','new link','open link','broadcast','alink'].includes(lower)) {
-    return { companyName: '', phone: '', isOpen: true }
+    return { companyName: '', contactPerson: '', phone: '', isOpen: true }
   }
 
-  // Extract phone number if present (e.g. "+86 138 0000 0000")
+  // Comma-separated structured input
+  if (t.includes(',')) {
+    const parts = t.split(',').map(p => p.trim())
+    const companyName = parts[0]
+
+    // Second part: person name or phone?
+    const second = parts[1] || ''
+    const phoneInSecond = second.match(/^\+?\d[\d\s\-]{7,14}\d$/)
+
+    if (phoneInSecond) {
+      // "Company, Phone"
+      return { companyName, contactPerson: '', phone: second.replace(/[\s\-]/g, ''), isOpen: false }
+    }
+
+    // "Company, Person" or "Company, Person, Phone"
+    const contactPerson = second
+    const third = parts[2] || ''
+    const phoneMatch = third.match(/\+?\d[\d\s\-]{7,14}\d/)
+    const phone = phoneMatch ? phoneMatch[0].replace(/[\s\-]/g, '') : ''
+    return { companyName, contactPerson, phone, isOpen: false }
+  }
+
+  // No commas: extract inline phone if present
   const phoneMatch = t.match(/\+?\d[\d\s\-]{7,14}\d/)
   const phone = phoneMatch ? phoneMatch[0].replace(/[\s\-]/g, '') : ''
   const companyName = phone ? t.replace(phoneMatch[0], '').replace(/[-,|]+$/, '').trim() : t
 
-  return { companyName, phone, isOpen: false }
+  return { companyName, contactPerson: '', phone, isOpen: false }
 }
 
 // Create a guest upload link (replicates invite-supplier create logic)
-async function createUploadLink(supabaseAdmin, { companyName, phone, isOpen, adminId }) {
+async function createUploadLink(supabaseAdmin, { companyName, contactPerson, phone, isOpen, adminId }) {
   let authEmail  = null
   let supplierId = null
 
@@ -65,8 +93,9 @@ async function createUploadLink(supabaseAdmin, { companyName, phone, isOpen, adm
     supplierId = newUser.user.id
 
     const updates = {}
-    if (companyName) updates.company_name_en = companyName
-    if (phone) updates.phone = phone
+    if (companyName)   updates.company_name_en   = companyName
+    if (phone)         updates.phone              = phone
+    if (contactPerson) updates.contact_person_en  = contactPerson
     if (Object.keys(updates).length) {
       await supabaseAdmin.from('suppliers').update(updates).eq('id', supplierId)
     }
@@ -76,15 +105,16 @@ async function createUploadLink(supabaseAdmin, { companyName, phone, isOpen, adm
   const { data: invite, error: invErr } = await supabaseAdmin
     .from('supplier_invitations')
     .insert({
-      company_name_en: companyName || null,
-      phone: phone || null,
-      link_type: isOpen ? 'open' : 'specific',
-      auth_email: authEmail,
-      supplier_id: supplierId,
-      auto_signup: true,
-      expires_at: null,
-      status: 'pending',
-      created_by: adminId || null,
+      company_name_en:   companyName    || null,
+      contact_person_en: contactPerson  || null,
+      phone:             phone          || null,
+      link_type:         isOpen ? 'open' : 'specific',
+      auth_email:        authEmail,
+      supplier_id:       supplierId,
+      auto_signup:       true,
+      expires_at:        null,
+      status:            'pending',
+      created_by:        adminId || null,
     })
     .select('invite_token')
     .single()
@@ -212,54 +242,59 @@ export default async function handler(req, res) {
             } catch {}
           }
 
-          // ── Admin command: "alink" keyword → generate upload link ──
+          // ── Admin command: "alink" from 919841081945 → generate upload link ──
+          // Security: ONLY process if sender is the admin's number (919841081945)
           const isAdminPhone = phone.replace(/[^\d]/g, '') === adminPhone
           const hasAlinkKeyword = msg.type === 'text' && content.toLowerCase().includes('alink')
+
           if (hasAlinkKeyword && isAdminPhone && waPhoneId && waToken) {
             try {
-              // Strip the "alink" keyword before parsing the rest as company name
               const stripped = content.replace(/alink\s*/i, '').trim()
-              const { companyName, phone: supplierPhone, isOpen } = parseAdminMsg(stripped || 'link')
+              const { companyName, contactPerson, phone: supplierPhone, isOpen } = parseAdminMsg(stripped || 'link')
 
-              // Look up admin record (created_by field)
               const { data: adminRows } = await supabaseAdmin.from('admins').select('id').limit(1)
               const adminId = adminRows?.[0]?.id || null
 
-              const linkUrl = await createUploadLink(supabaseAdmin, { companyName, phone: supplierPhone, isOpen, adminId })
+              const linkUrl = await createUploadLink(supabaseAdmin, {
+                companyName, contactPerson, phone: supplierPhone, isOpen, adminId,
+              })
 
-              const label = companyName || (isOpen ? 'Generic link' : 'Supplier')
+              const label    = companyName  || (isOpen ? 'Generic / Broadcast' : 'Supplier')
+              const greeting = contactPerson || companyName || ''
 
-              // Reply 1: confirmation with URL
               const confirmMsg = [
                 `✅ Upload link created`,
                 ``,
-                `Supplier: ${label}`,
-                supplierPhone ? `Phone: ${supplierPhone}` : '',
+                companyName   ? `Company: ${companyName}`     : `Type: Generic / Broadcast link`,
+                contactPerson ? `Contact: ${contactPerson}`   : '',
+                supplierPhone ? `Phone:   ${supplierPhone}`   : '',
                 ``,
-                `Link:`,
-                linkUrl,
+                `Link: ${linkUrl}`,
                 ``,
-                `──────────────`,
-                `Forward to supplier (Chinese):`,
-                `──────────────`,
-                `您好 ${companyName || ''}！`,
+                `─────────────────────────`,
+                `Forward to supplier (中文):`,
+                `─────────────────────────`,
+                `您好${greeting ? ' ' + greeting : ''}！`,
                 ``,
-                `Aryana Amusements 邀请您通过以下链接直接上传产品图片、视频和价格表（无需注册）：`,
+                `Aryana Amusements 邀请您通过以下专属链接上传产品图片、视频和价格表（无需注册，直接上传）：`,
                 ``,
                 linkUrl,
                 ``,
                 `如有疑问请联系：`,
                 `Bhavesh — Aryana Amusements`,
                 `+91 9841081945`,
-              ].filter(l => l !== null && l !== undefined).join('\n')
+              ].filter(Boolean).join('\n')
 
               await sendWaText(waPhoneId, waToken, phone, confirmMsg)
+
             } catch (cmdErr) {
               console.error('Admin link command failed:', cmdErr.message)
-              if (waPhoneId && waToken) {
-                await sendWaText(waPhoneId, waToken, phone, `❌ Could not create link: ${cmdErr.message}`)
-              }
+              await sendWaText(waPhoneId, waToken, phone, `❌ Could not create link: ${cmdErr.message}`)
             }
+
+          } else if (hasAlinkKeyword && !isAdminPhone) {
+            // Someone else sent "alink" — ignore silently (do not generate a link)
+            console.log(`"alink" received from non-admin number ${phone} — ignored`)
           }
         }
 
