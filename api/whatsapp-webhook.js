@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 
-const SITE_URL = process.env.SITE_URL || 'https://supply.indiajobworks.com'
+const SITE_URL = process.env.SITE_URL || 'https://supply.indiajobwork.com'
 const WA_API   = 'https://graph.facebook.com/v19.0'
 
 function makeAdmin() {

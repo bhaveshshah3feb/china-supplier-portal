@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 
-const SITE_URL = process.env.SITE_URL || 'https://supply.indiajobworks.com'
+const SITE_URL = process.env.SITE_URL || 'https://supply.indiajobwork.com'
 
 function makeAdmin() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL

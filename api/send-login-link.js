@@ -5,7 +5,7 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 )
 
-const SITE_URL = process.env.SITE_URL || 'https://supply.indiajobworks.com'
+const SITE_URL = process.env.SITE_URL || 'https://supply.indiajobwork.com'
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
