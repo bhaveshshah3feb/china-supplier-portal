@@ -163,9 +163,6 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method not allowed')
 
   // ── POST: incoming events (forwarded from existing PHP webhook) ──────────
-  // Respond 200 immediately — Meta/PHP forwarder will retry if we're slow
-  res.status(200).json({ ok: true })
-
   try {
     const supabaseAdmin = makeAdmin()
     if (!supabaseAdmin) return
@@ -316,4 +313,7 @@ export default async function handler(req, res) {
   } catch (err) {
     console.error('WhatsApp webhook unhandled error:', err)
   }
+
+  // Respond after all processing is done — Vercel cuts async work after early res.end()
+  res.status(200).json({ ok: true })
 }
