@@ -1,10 +1,96 @@
 import { createClient } from '@supabase/supabase-js'
 
+const SITE_URL = process.env.SITE_URL || 'https://supply.indiajobworks.com'
+const WA_API   = 'https://graph.facebook.com/v19.0'
+
 function makeAdmin() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_KEY
   if (!url || !key) return null
   return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } })
+}
+
+// Send a plain text WhatsApp message (works within 24h customer service window)
+async function sendWaText(phoneNumberId, accessToken, toPhone, text) {
+  try {
+    await fetch(`${WA_API}/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: toPhone,
+        type: 'text',
+        text: { body: text },
+      }),
+    })
+  } catch (e) {
+    console.warn('sendWaText failed:', e.message)
+  }
+}
+
+// Parse what Bhavesh typed: returns { companyName, phone, isOpen }
+function parseAdminMsg(text) {
+  const t = (text || '').trim()
+  const lower = t.toLowerCase()
+
+  // "link", "open", "new link", "open link" → generic/broadcast link
+  if (!t || ['link','open','new link','open link','broadcast'].includes(lower)) {
+    return { companyName: '', phone: '', isOpen: true }
+  }
+
+  // Extract phone number if present (e.g. "+86 138 0000 0000")
+  const phoneMatch = t.match(/\+?\d[\d\s\-]{7,14}\d/)
+  const phone = phoneMatch ? phoneMatch[0].replace(/[\s\-]/g, '') : ''
+  const companyName = phone ? t.replace(phoneMatch[0], '').replace(/[-,|]+$/, '').trim() : t
+
+  return { companyName, phone, isOpen: false }
+}
+
+// Create a guest upload link (replicates invite-supplier create logic)
+async function createUploadLink(supabaseAdmin, { companyName, phone, isOpen, adminId }) {
+  let authEmail  = null
+  let supplierId = null
+
+  if (!isOpen) {
+    const shortId = Math.random().toString(36).slice(2, 10)
+    authEmail = `g-${shortId}@upload.internal`
+
+    const { data: newUser, error } = await supabaseAdmin.auth.admin.createUser({
+      email: authEmail,
+      email_confirm: true,
+      user_metadata: { role: 'supplier', company_name_en: companyName, phone },
+    })
+    if (error) throw new Error('Could not create supplier: ' + error.message)
+    supplierId = newUser.user.id
+
+    const updates = {}
+    if (companyName) updates.company_name_en = companyName
+    if (phone) updates.phone = phone
+    if (Object.keys(updates).length) {
+      await supabaseAdmin.from('suppliers').update(updates).eq('id', supplierId)
+    }
+    await supabaseAdmin.from('suppliers').update({ status: 'active' }).eq('id', supplierId)
+  }
+
+  const { data: invite, error: invErr } = await supabaseAdmin
+    .from('supplier_invitations')
+    .insert({
+      company_name_en: companyName || null,
+      phone: phone || null,
+      link_type: isOpen ? 'open' : 'specific',
+      auth_email: authEmail,
+      supplier_id: supplierId,
+      auto_signup: true,
+      expires_at: null,
+      status: 'pending',
+      created_by: adminId || null,
+    })
+    .select('invite_token')
+    .single()
+
+  if (invErr) throw new Error('DB error: ' + invErr.message)
+  return `${SITE_URL}/u/${invite.invite_token}`
 }
 
 function extractContent(msg) {
@@ -73,6 +159,17 @@ export default async function handler(req, res) {
     const body = req.body
     if (body.object !== 'whatsapp_business_account') return
 
+    // Load WA credentials + admin phone number once per webhook call
+    const { data: settingsRows } = await supabaseAdmin
+      .from('settings').select('key, value')
+      .in('key', ['whatsapp_phone_number_id', 'whatsapp_access_token', 'admin_whatsapp_number'])
+    const cfg = {}
+    for (const r of (settingsRows || [])) cfg[r.key] = r.value
+    const waPhoneId    = cfg.whatsapp_phone_number_id || ''
+    const waToken      = cfg.whatsapp_access_token    || ''
+    // Admin phone: strip non-digits, also support "919841081945" without "+"
+    const adminPhone   = (cfg.admin_whatsapp_number || '919841081945').replace(/[^\d]/g, '')
+
     for (const entry of body.entry || []) {
       for (const change of entry.changes || []) {
         if (change.field !== 'messages') continue
@@ -113,6 +210,52 @@ export default async function handler(req, res) {
                 .eq('phone_number', phone)
                 .is('contact_name', null)
             } catch {}
+          }
+
+          // ── Admin command: message from Bhavesh → generate upload link ──
+          if (msg.type === 'text' && phone.replace(/[^\d]/g, '') === adminPhone && waPhoneId && waToken) {
+            try {
+              const { companyName, phone: supplierPhone, isOpen } = parseAdminMsg(content)
+
+              // Look up admin record (created_by field)
+              const { data: adminRows } = await supabaseAdmin.from('admins').select('id').limit(1)
+              const adminId = adminRows?.[0]?.id || null
+
+              const linkUrl = await createUploadLink(supabaseAdmin, { companyName, phone: supplierPhone, isOpen, adminId })
+
+              const label = companyName || (isOpen ? 'Generic link' : 'Supplier')
+
+              // Reply 1: confirmation with URL
+              const confirmMsg = [
+                `✅ Upload link created`,
+                ``,
+                `Supplier: ${label}`,
+                supplierPhone ? `Phone: ${supplierPhone}` : '',
+                ``,
+                `Link:`,
+                linkUrl,
+                ``,
+                `──────────────`,
+                `Forward to supplier (Chinese):`,
+                `──────────────`,
+                `您好 ${companyName || ''}！`,
+                ``,
+                `Aryana Amusements 邀请您通过以下链接直接上传产品图片、视频和价格表（无需注册）：`,
+                ``,
+                linkUrl,
+                ``,
+                `如有疑问请联系：`,
+                `Bhavesh — Aryana Amusements`,
+                `+91 9841081945`,
+              ].filter(l => l !== null && l !== undefined).join('\n')
+
+              await sendWaText(waPhoneId, waToken, phone, confirmMsg)
+            } catch (cmdErr) {
+              console.error('Admin link command failed:', cmdErr.message)
+              if (waPhoneId && waToken) {
+                await sendWaText(waPhoneId, waToken, phone, `❌ Could not create link: ${cmdErr.message}`)
+              }
+            }
           }
         }
 
