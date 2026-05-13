@@ -97,7 +97,9 @@ export default async function handler(req, res) {
       .eq('id', invite.id)
   }
 
-  // Generate a Supabase magic link for the auth user
+  // Generate a Supabase magic link and return the hashed token directly.
+  // The client verifies it via supabase.auth.verifyOtp() — no redirect URL needed,
+  // so it works regardless of the Supabase Site URL setting.
   const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
     type: 'magiclink',
     email: authEmail,
@@ -107,7 +109,7 @@ export default async function handler(req, res) {
   if (linkErr) return res.status(500).json({ error: 'Could not generate login link: ' + linkErr.message })
 
   return res.status(200).json({
-    redirectUrl: linkData.properties.action_link,
+    tokenHash: linkData.properties.hashed_token,
     isOpen: invite.link_type === 'open',
     personalToken,
   })

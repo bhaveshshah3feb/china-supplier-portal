@@ -4,18 +4,17 @@ import { supabase } from '../../lib/supabase'
 
 export default function GuestLanding() {
   const { token } = useParams()
-  const [stage, setStage]       = useState('loading')  // loading | form | error
+  const [stage, setStage]       = useState('loading')  // loading | ready | uploading | error
   const [error, setError]       = useState('')
   const [form, setForm]         = useState({ companyName: '', phone: '' })
+  const [isOpen, setIsOpen]     = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => { checkLink() }, [token])
 
   async function checkLink() {
     if (!token) { setError('No link token provided'); setStage('error'); return }
-
     try {
-      // Read link_type from public invitation record (no auth needed)
       const { data: invite } = await supabase
         .from('supplier_invitations')
         .select('link_type, status, expires_at')
@@ -28,55 +27,52 @@ export default function GuestLanding() {
         setError('This link has expired. Contact Aryana Amusements for a new one.')
         setStage('error'); return
       }
-
-      if (invite.link_type === 'open') {
-        // Show optional form before creating account
-        setStage('form')
-      } else {
-        // Specific link — auto-login immediately
-        await activate()
-      }
+      setIsOpen(invite.link_type === 'open')
+      setStage('ready')
     } catch {
       setError('Could not connect to server')
       setStage('error')
     }
   }
 
-  async function activate(overrideForm) {
-    const f = overrideForm || form
+  async function activate(companyName, phone) {
+    setSubmitting(true)
     try {
+      // Step 1: call API to create/find supplier account, get token hash back
       const res = await fetch('/api/guest-access', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token,
-          companyName: f.companyName || undefined,
-          phone: f.phone || undefined,
+          companyName: companyName || undefined,
+          phone: phone || undefined,
         }),
       })
       const json = await res.json()
       if (!res.ok) { setError(json.error || 'Failed to activate link'); setStage('error'); return }
 
-      // Store personal token so dashboard can show the "bookmark your link" banner
       if (json.personalToken) {
         localStorage.setItem('guestPersonalToken', json.personalToken)
       }
-      // Redirect to Supabase magic link → auto-authenticates → lands on /dashboard
-      window.location.href = json.redirectUrl
-    } catch {
+
+      // Step 2: verify OTP client-side — no redirect URL needed, works on any domain
+      const { error: otpErr } = await supabase.auth.verifyOtp({
+        token_hash: json.tokenHash,
+        type: 'magiclink',
+      })
+      if (otpErr) { setError('Could not sign in: ' + otpErr.message); setStage('error'); return }
+
+      // Step 3: navigate to dashboard
+      window.location.href = '/dashboard'
+    } catch (e) {
       setError('Could not connect to server')
       setStage('error')
+    } finally {
+      setSubmitting(false)
     }
   }
 
-  async function handleSubmit(e) {
-    e.preventDefault()
-    setSubmitting(true)
-    await activate(form)
-    setSubmitting(false)
-  }
-
-  // ── Loading spinner ────────────────────────────────────────
+  // ── Loading ────────────────────────────────────────────────
   if (stage === 'loading') return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 gap-4">
       <div className="w-10 h-10 border-4 border-red-500 border-t-transparent rounded-full animate-spin" />
@@ -84,7 +80,7 @@ export default function GuestLanding() {
     </div>
   )
 
-  // ── Error state ────────────────────────────────────────────
+  // ── Error ──────────────────────────────────────────────────
   if (stage === 'error') return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white rounded-2xl border border-red-200 p-8 max-w-sm w-full text-center space-y-3 shadow-sm">
@@ -92,7 +88,7 @@ export default function GuestLanding() {
         <h2 className="font-semibold text-gray-800">Link unavailable</h2>
         <p className="text-sm text-red-600">{error}</p>
         <p className="text-xs text-gray-400 mt-2">
-          Contact Aryana Amusements for a new link:<br />
+          Contact Aryana Amusements:<br />
           <a href="https://wa.me/919841081945" className="text-green-600 font-medium hover:underline">
             WhatsApp Bhavesh +91 98410 81945
           </a>
@@ -101,65 +97,68 @@ export default function GuestLanding() {
     </div>
   )
 
-  // ── Open-link form ─────────────────────────────────────────
+  // ── Main page ──────────────────────────────────────────────
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
-      <div className="bg-white rounded-2xl shadow-lg w-full max-w-sm p-8 space-y-6">
+      <div className="bg-white rounded-2xl shadow-lg w-full max-w-sm overflow-hidden">
 
-        <div className="text-center space-y-2">
-          <div className="text-4xl">📤</div>
-          <h1 className="text-xl font-bold text-gray-800">Upload Your Products</h1>
-          <p className="text-sm text-gray-400">Aryana Amusements — Supplier Portal</p>
+        {/* Header */}
+        <div className="bg-gradient-to-r from-red-700 to-red-500 px-8 py-6 text-white text-center">
+          <div className="text-3xl mb-2">📤</div>
+          <h1 className="text-xl font-bold">Upload Your Products</h1>
+          <p className="text-red-200 text-xs mt-1">Aryana Amusements — Supplier Portal</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">
-              Company Name <span className="text-gray-400 font-normal">(optional)</span>
-            </label>
-            <input
-              value={form.companyName}
-              onChange={e => setForm(f => ({ ...f, companyName: e.target.value }))}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-400 focus:border-red-400"
-              placeholder="e.g. Guangzhou ABC Technology Co."
-            />
-          </div>
+        <div className="px-8 py-6 space-y-5">
 
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">
-              WhatsApp Number <span className="text-gray-400 font-normal">(optional)</span>
-            </label>
-            <input
-              value={form.phone}
-              onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-400 focus:border-red-400"
-              placeholder="+86 138 0000 0000"
-            />
-          </div>
-
+          {/* Primary action — always at top */}
           <button
-            type="submit"
+            onClick={() => activate(form.companyName, form.phone)}
             disabled={submitting}
-            className="w-full py-3 bg-red-600 text-white rounded-xl font-semibold text-sm hover:bg-red-700 transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
+            className="w-full py-3.5 bg-red-600 text-white rounded-xl font-bold text-base hover:bg-red-700 transition-colors disabled:opacity-60 flex items-center justify-center gap-2 shadow-sm"
           >
             {submitting
               ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Starting…</>
               : 'Start Uploading →'}
           </button>
 
-          <button
-            type="button"
-            onClick={() => activate({ companyName: '', phone: '' })}
-            disabled={submitting}
-            className="w-full text-xs text-gray-400 hover:text-gray-600 py-1 transition-colors"
-          >
-            Skip — upload without details
-          </button>
-        </form>
+          {/* Divider */}
+          {isOpen && (
+            <>
+              <div className="flex items-center gap-3">
+                <div className="flex-1 h-px bg-gray-100" />
+                <span className="text-xs text-gray-400">optional — helps us label your files</span>
+                <div className="flex-1 h-px bg-gray-100" />
+              </div>
 
-        <p className="text-[11px] text-gray-300 text-center">
-          Your files will be processed and branded by Aryana Amusements for sales use.
-        </p>
+              {/* Optional fields — at bottom */}
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Company Name</label>
+                  <input
+                    value={form.companyName}
+                    onChange={e => setForm(f => ({ ...f, companyName: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-300 focus:border-red-400"
+                    placeholder="e.g. Guangzhou ABC Technology Co."
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">WhatsApp / WeChat Number</label>
+                  <input
+                    value={form.phone}
+                    onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-300 focus:border-red-400"
+                    placeholder="+86 138 0000 0000"
+                  />
+                </div>
+              </div>
+
+              <p className="text-[11px] text-gray-300 text-center">
+                Your files will be processed and branded by Aryana Amusements for sales use.
+              </p>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
