@@ -327,16 +327,20 @@ export default async function handler(req, res) {
                   const mediaId = msg.video?.id || msg.image?.id || msg.document?.id
                   const mime    = msg.video?.mime_type || msg.image?.mime_type || msg.document?.mime_type || ''
 
-                  await supabaseAdmin.from('pending_wa_uploads').insert({
-                    supplier_id:   session.supplier_id,
-                    supplier_name: session.supplier_name,
-                    supplier_code: session.supplier_code,
-                    media_id:      mediaId,
-                    media_type:    msg.type,
-                    mime_type:     mime,
-                    admin_phone:   phone,
-                    status:        'pending',
-                  })
+                  // ON CONFLICT DO NOTHING deduplicates Meta webhook retries
+                  const { error: qErr } = await supabaseAdmin
+                    .from('pending_wa_uploads')
+                    .upsert({
+                      supplier_id:   session.supplier_id,
+                      supplier_name: session.supplier_name,
+                      supplier_code: session.supplier_code,
+                      media_id:      mediaId,
+                      media_type:    msg.type,
+                      mime_type:     mime,
+                      admin_phone:   phone,
+                      status:        'pending',
+                    }, { onConflict: 'media_id', ignoreDuplicates: true })
+                  if (qErr) throw new Error('Queue insert failed: ' + qErr.message)
 
                   // Increment count in session
                   await saveSession(supabaseAdmin, { ...session, upload_count: (session.upload_count || 0) + 1 })

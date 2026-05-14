@@ -54,9 +54,18 @@ async function sendWa(phoneId, token, to, text) {
 async function processItem(item, waPhoneId, waToken) {
   console.log(`Processing ${item.id}: ${item.media_type} for ${item.supplier_name}`)
 
-  await supabase.from('pending_wa_uploads')
+  // Atomic claim: only proceed if WE successfully changed pending → processing.
+  // Postgres UPDATE is row-locked, so concurrent runs won't double-process.
+  const { count } = await supabase.from('pending_wa_uploads')
     .update({ status: 'processing', updated_at: new Date().toISOString() })
     .eq('id', item.id)
+    .eq('status', 'pending')   // guard: skip if already claimed by another run
+    .select('id', { count: 'exact', head: true })
+
+  if (!count) {
+    console.log(`Skipping ${item.id} — already claimed by another run`)
+    return
+  }
 
   // Step 1: get download URL from Meta
   const infoRes = await fetch(`${WA_API}/${item.media_id}`, {
@@ -124,6 +133,8 @@ async function main() {
   const { phoneId, token } = await getWaCredentials()
   if (!token) { console.error('No WA token in settings'); process.exit(1) }
 
+  // Only pick up pending (not processing/done/failed) — concurrent runs are safe
+  // because processItem() does a second atomic claim before any work starts
   const { data: items, error } = await supabase
     .from('pending_wa_uploads')
     .select('*')
