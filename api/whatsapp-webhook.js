@@ -10,6 +10,37 @@ function makeAdmin() {
   return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } })
 }
 
+// ── Session helpers (stored in settings table as JSON) ──────────────────────
+async function getSession(sb) {
+  const { data } = await sb.from('settings').select('value').eq('key', 'admin_wa_session').maybeSingle()
+  if (!data?.value) return null
+  try {
+    const s = JSON.parse(data.value)
+    // Auto-expire after 2 hours of inactivity
+    if (Date.now() - new Date(s.updated_at || 0).getTime() > 2 * 60 * 60 * 1000) return null
+    return s
+  } catch { return null }
+}
+async function saveSession(sb, session) {
+  const value = JSON.stringify({ ...session, updated_at: new Date().toISOString() })
+  await sb.from('settings').upsert({ key: 'admin_wa_session', value }, { onConflict: 'key' })
+}
+async function clearSession(sb) {
+  await sb.from('settings').delete().eq('key', 'admin_wa_session')
+}
+
+// ── Trigger the WA upload GitHub Actions workflow ────────────────────────────
+async function triggerWaUploadWorkflow(sb) {
+  const { data } = await sb.from('settings').select('value').eq('key', 'github_pat').maybeSingle()
+  const pat = data?.value
+  if (!pat) return
+  await fetch('https://api.github.com/repos/bhaveshshah3feb/china-supplier-portal/actions/workflows/process-wa-uploads.yml/dispatches', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ref: 'master' }),
+  })
+}
+
 // Send a plain text WhatsApp message (works within 24h customer service window)
 async function sendWaText(phoneNumberId, accessToken, toPhone, text) {
   try {
@@ -232,60 +263,129 @@ export default async function handler(req, res) {
             } catch {}
           }
 
-          // ── Admin command: "link" word from 919841081945 → generate upload link ──
-          // Security: ONLY process if sender is the admin's number (919841081945)
+          // ── All admin commands (only from 919841081945) ──────────────────────
           const isAdminPhone = phone.replace(/[^\d]/g, '') === adminPhone
-          const hasLinkKeyword = msg.type === 'text' && /\blink\b/i.test(content)
 
-          if (hasLinkKeyword && isAdminPhone && waPhoneId && waToken) {
+          if (isAdminPhone && waPhoneId && waToken) {
+            const trimmed = content.trim()
+            const session = await getSession(supabaseAdmin)
+
             try {
-              // Strip the word "link" and trim to get company/contact info
-              const stripped = content.replace(/\blink\b/gi, '').trim()
-              const { companyName, contactPerson, phone: supplierPhone, isOpen } = parseAdminMsg(stripped || 'link')
 
-              const { data: adminRows } = await supabaseAdmin.from('admins').select('id').limit(1)
-              const adminId = adminRows?.[0]?.id || null
+              // ── stop / cancel → end session ──────────────────────────────
+              if (/^(stop|cancel|done|exit)\b/i.test(trimmed)) {
+                await clearSession(supabaseAdmin)
+                await sendWaText(waPhoneId, waToken, phone, '⏹ Upload session ended.')
 
-              const linkUrl = await createUploadLink(supabaseAdmin, {
-                companyName, contactPerson, phone: supplierPhone, isOpen, adminId,
-              })
+              // ── dir → list suppliers ──────────────────────────────────────
+              } else if (/^dir\b/i.test(trimmed)) {
+                const { data: suppliers } = await supabaseAdmin
+                  .from('suppliers')
+                  .select('id, company_name_en, supplier_code')
+                  .eq('status', 'active')
+                  .order('company_name_en')
+                  .limit(30)
 
-              const label    = companyName  || (isOpen ? 'Generic / Broadcast' : 'Supplier')
-              const greeting = contactPerson || companyName || ''
+                if (!suppliers?.length) {
+                  await sendWaText(waPhoneId, waToken, phone, 'No active suppliers found.')
+                } else {
+                  const list = suppliers.map((s, i) =>
+                    `${i + 1}. ${s.company_name_en} (${s.supplier_code})`).join('\n')
+                  await saveSession(supabaseAdmin, {
+                    state: 'selecting',
+                    suppliers: suppliers.map(s => ({ id: s.id, name: s.company_name_en, code: s.supplier_code })),
+                  })
+                  await sendWaText(waPhoneId, waToken, phone,
+                    `📋 Active suppliers:\n\n${list}\n\nReply with a number to select where to upload files.\nSend *stop* to cancel.`)
+                }
 
-              const confirmMsg = [
-                `✅ Upload link created`,
-                ``,
-                companyName   ? `Company: ${companyName}`     : `Type: Generic / Broadcast link`,
-                contactPerson ? `Contact: ${contactPerson}`   : '',
-                supplierPhone ? `Phone:   ${supplierPhone}`   : '',
-                ``,
-                `Link: ${linkUrl}`,
-                ``,
-                `─────────────────────────`,
-                `Forward to supplier (中文):`,
-                `─────────────────────────`,
-                `您好${greeting ? ' ' + greeting : ''}！`,
-                ``,
-                `Aryana Amusements 邀请您通过以下专属链接上传产品图片、视频和价格表（无需注册，直接上传）：`,
-                ``,
-                linkUrl,
-                ``,
-                `如有疑问请联系：`,
-                `Bhavesh — Aryana Amusements`,
-                `+91 9841081945`,
-              ].filter(Boolean).join('\n')
+              // ── number → select supplier from list ───────────────────────
+              } else if (/^\d+$/.test(trimmed) && session?.state === 'selecting') {
+                const idx = parseInt(trimmed, 10) - 1
+                const chosen = session.suppliers?.[idx]
+                if (!chosen) {
+                  await sendWaText(waPhoneId, waToken, phone,
+                    `❌ Invalid number. Send a number between 1 and ${session.suppliers?.length || '?'}.`)
+                } else {
+                  await saveSession(supabaseAdmin, {
+                    state: 'uploading',
+                    supplier_id:   chosen.id,
+                    supplier_name: chosen.name,
+                    supplier_code: chosen.code,
+                    upload_count:  0,
+                  })
+                  await sendWaText(waPhoneId, waToken, phone,
+                    `✅ Ready! Send videos or images — they'll upload to *${chosen.name}*.\nSend *stop* when done.`)
+                }
 
-              await sendWaText(waPhoneId, waToken, phone, confirmMsg)
+              // ── video / image / document → queue upload ──────────────────
+              } else if (['video', 'image', 'document'].includes(msg.type)) {
+                if (session?.state !== 'uploading') {
+                  await sendWaText(waPhoneId, waToken, phone,
+                    'No active upload session.\nSend *dir* to see supplier list and select one first.')
+                } else {
+                  const mediaId = msg.video?.id || msg.image?.id || msg.document?.id
+                  const mime    = msg.video?.mime_type || msg.image?.mime_type || msg.document?.mime_type || ''
+
+                  await supabaseAdmin.from('pending_wa_uploads').insert({
+                    supplier_id:   session.supplier_id,
+                    supplier_name: session.supplier_name,
+                    supplier_code: session.supplier_code,
+                    media_id:      mediaId,
+                    media_type:    msg.type,
+                    mime_type:     mime,
+                    admin_phone:   phone,
+                    status:        'pending',
+                  })
+
+                  // Increment count in session
+                  await saveSession(supabaseAdmin, { ...session, upload_count: (session.upload_count || 0) + 1 })
+
+                  await triggerWaUploadWorkflow(supabaseAdmin)
+                  await sendWaText(waPhoneId, waToken, phone,
+                    `📥 ${msg.type === 'video' ? '🎬' : '🖼️'} Received! Uploading to *${session.supplier_name}*... (~1 min)`)
+                }
+
+              // ── link → generate supplier upload link (existing feature) ──
+              } else if (/\blink\b/i.test(content)) {
+                const stripped = content.replace(/\blink\b/gi, '').trim()
+                const { companyName, contactPerson, phone: supplierPhone, isOpen } = parseAdminMsg(stripped || 'link')
+                const { data: adminRows } = await supabaseAdmin.from('admins').select('id').limit(1)
+                const adminId = adminRows?.[0]?.id || null
+                const linkUrl = await createUploadLink(supabaseAdmin, { companyName, contactPerson, phone: supplierPhone, isOpen, adminId })
+                const greeting = contactPerson || companyName || ''
+                const confirmMsg = [
+                  `✅ Upload link created`,
+                  ``,
+                  companyName   ? `Company: ${companyName}`   : `Type: Generic / Broadcast link`,
+                  contactPerson ? `Contact: ${contactPerson}` : '',
+                  supplierPhone ? `Phone:   ${supplierPhone}` : '',
+                  ``,
+                  `Link: ${linkUrl}`,
+                  ``,
+                  `─────────────────────────`,
+                  `Forward to supplier (中文):`,
+                  `─────────────────────────`,
+                  `您好${greeting ? ' ' + greeting : ''}！`,
+                  ``,
+                  `Aryana Amusements 邀请您通过以下专属链接上传产品图片、视频和价格表（无需注册，直接上传）：`,
+                  ``,
+                  linkUrl,
+                  ``,
+                  `如有疑问请联系：`,
+                  `Bhavesh — Aryana Amusements`,
+                  `+91 9841081945`,
+                ].filter(Boolean).join('\n')
+                await sendWaText(waPhoneId, waToken, phone, confirmMsg)
+              }
 
             } catch (cmdErr) {
-              console.error('Admin link command failed:', cmdErr.message)
-              await sendWaText(waPhoneId, waToken, phone, `❌ Could not create link: ${cmdErr.message}`)
+              console.error('Admin command failed:', cmdErr.message)
+              await sendWaText(waPhoneId, waToken, phone, `❌ Error: ${cmdErr.message}`)
             }
 
-          } else if (hasLinkKeyword && !isAdminPhone) {
-            // Someone else sent "link" — ignore silently (do not generate a link)
-            console.log(`"link" keyword received from non-admin number ${phone} — ignored`)
+          } else if (!isAdminPhone && /\blink\b/i.test(content) && msg.type === 'text') {
+            console.log(`"link" from non-admin ${phone} — ignored`)
           }
         }
 

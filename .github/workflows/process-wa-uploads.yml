@@ -1,0 +1,35 @@
+name: Process WhatsApp Uploads
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Fallback: runs every 10 minutes in case webhook dispatch fails
+    - cron: '*/10 * * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Process pending WhatsApp uploads
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node scripts/process-wa-uploads.mjs
