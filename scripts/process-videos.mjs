@@ -554,7 +554,7 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
 
       const ffCmd = isImage
         ? `ffmpeg -i "${tmpInput}" ${logoInput} -filter_complex "${filterComplex}" -map "[out]" -q:v 2 -frames:v 1 "${tmpOutput}" -y`
-        : `ffmpeg -i "${tmpInput}" ${logoInput} -filter_complex "${filterComplex}" -map "[out]" -map 0:a? -c:v libx264 -crf 23 -preset fast "${tmpOutput}" -y`
+        : `ffmpeg -i "${tmpInput}" ${logoInput} -filter_complex "${filterComplex}" -map "[out]" -map 0:a? -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p -movflags +faststart "${tmpOutput}" -y`
 
       console.log(`  FFmpeg (${isImage ? 'image' : 'video'}) command:`, ffCmd)
 
