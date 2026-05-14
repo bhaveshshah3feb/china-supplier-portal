@@ -103,23 +103,68 @@ function calcWM(vidW, vidH) {
 // Runs Claude Vision on 1..N frames, returns union bounding box of all detections.
 // mimeType: MIME type of the frame files (always image/jpeg for video frames; varies for images)
 async function detectSupplierLogo(frames, mimeType = 'image/jpeg') {
+  const PROMPT = `You are analyzing an amusement/arcade machine image to find manufacturer branding that must be concealed.
+
+A REAL manufacturer logo is:
+- A corporate badge, seal, or logotype physically ON THE MACHINE CABINET (not on a video screen)
+- Found on the TOP MARQUEE panel, a corner sticker, or the side/bottom panel of the cabinet
+- Small-to-medium in size: typically less than 25% of frame width and less than 20% of frame height
+- Contains the manufacturer company name (e.g. UNIS, IGS, ICE, SEGA, NAMCO, KONAMI, WAHLAP)
+- Has a plain or solid-color background (it is a label or badge)
+
+DO NOT flag any of these — they are NOT manufacturer logos:
+- Game title text or artwork shown on the VIDEO SCREEN (e.g. "Dragon Blade", "Street Fighter")
+- In-game animations, attract-mode videos, or game graphics displayed on a screen
+- Large colorful text/artwork that clearly belongs to the game's visual theme
+- Any text covering more than 30% of the frame width (that is game artwork, not a company badge)
+- "Aryan Amusements" branding
+
+If you find a genuine manufacturer company badge/seal on the physical cabinet, reply ONLY with JSON (no markdown):
+{"found":true,"x_pct":X,"y_pct":Y,"w_pct":W,"h_pct":H,"confidence":0.0}
+where x_pct/y_pct = top-left corner as % of frame, w_pct/h_pct = size as % of frame.
+If none found: {"found":false}`
+
   const detections = []
   for (const frame of frames) {
     try {
       const resp = await anthropic.messages.create({
-        model: 'claude-haiku-4-5',
+        model: 'claude-sonnet-4-5',   // Sonnet: far more accurate than Haiku for visual nuance
         max_tokens: 150,
         messages: [{
           role: 'user',
           content: [
             { type: 'image', source: { type: 'base64', media_type: mimeType, data: readFileSync(frame).toString('base64') } },
-            { type: 'text', text: `Examine this amusement/arcade machine image for manufacturer or supplier branding that must be concealed. Look for: company logos (often large and centered on the cabinet), brand names, stickers, "TECHNOLOGY" company names (e.g. UNIS, IGS, ICE, SEGA, NAMCO, KONAMI etc.), or any manufacturer text on the machine body or attract screen. Ignore "Aryan Amusements". Ignore the game title/name displayed on screen. If branding found, reply ONLY with JSON (no markdown): {"found":true,"x_pct":X,"y_pct":Y,"w_pct":W,"h_pct":H,"confidence":0.0} as % of frame. If none: {"found":false}` },
+            { type: 'text', text: PROMPT },
           ],
         }],
       })
       const txt = resp.content[0]?.text?.trim().replace(/```json|```/g, '').trim()
       const d = JSON.parse(txt)
-      if (d.found && (d.confidence ?? 0.8) >= 0.50) detections.push(d)
+
+      if (!d.found) continue
+
+      const conf = d.confidence ?? 0.8
+      if (conf < 0.70) {
+        console.warn(`  Skipping low-confidence detection (${conf.toFixed(2)}) — not confident enough`)
+        continue
+      }
+
+      // Size guard: real manufacturer badges are small — never wider than 35% or taller than 35%
+      if (d.w_pct > 35 || d.h_pct > 35) {
+        console.warn(`  Skipping oversized detection (${d.w_pct.toFixed(0)}%×${d.h_pct.toFixed(0)}%) — likely game artwork`)
+        continue
+      }
+
+      // Position + size guard: large region centered in the frame = game screen artwork, not a badge
+      const cX = d.x_pct + d.w_pct / 2
+      const cY = d.y_pct + d.h_pct / 2
+      const isCenteredAndLarge = cX > 25 && cX < 75 && cY > 20 && cY < 70 && d.w_pct > 20 && d.h_pct > 20
+      if (isCenteredAndLarge) {
+        console.warn(`  Skipping center-frame detection at (${cX.toFixed(0)}%,${cY.toFixed(0)}%) size ${d.w_pct.toFixed(0)}%×${d.h_pct.toFixed(0)}% — likely game screen content`)
+        continue
+      }
+
+      detections.push(d)
     } catch (e) {
       console.warn(`  Supplier logo detection failed on frame: ${e.message}`)
     }
@@ -130,7 +175,7 @@ async function detectSupplierLogo(frames, mimeType = 'image/jpeg') {
   detections.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
   const best = detections[0]
 
-  // Union bounding box across all detections that are near the same region
+  // Union bounding box across all detections near the same region
   let x1 = best.x_pct, y1 = best.y_pct
   let x2 = x1 + best.w_pct, y2 = y1 + best.h_pct
   const bCx = best.x_pct + best.w_pct / 2, bCy = best.y_pct + best.h_pct / 2
@@ -485,7 +530,7 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       let supplierCoverFilters = []
       let supplierCoverOverlay = null
 
-      if (supplierRegion?.confidence >= 0.50) {
+      if (supplierRegion?.confidence >= 0.70) {
         const sx  = Math.round(vidW * supplierRegion.x_pct / 100)
         const sy  = Math.round(vidH * supplierRegion.y_pct / 100)
         const sw  = Math.round(vidW * supplierRegion.w_pct / 100)
