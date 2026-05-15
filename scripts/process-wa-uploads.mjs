@@ -55,14 +55,16 @@ async function processItem(item, waPhoneId, waToken) {
   console.log(`Processing ${item.id}: ${item.media_type} for ${item.supplier_name}`)
 
   // Atomic claim: only proceed if WE successfully changed pending → processing.
-  // Postgres UPDATE is row-locked, so concurrent runs won't double-process.
-  const { count } = await supabase.from('pending_wa_uploads')
+  // Use .select('id') (RETURNING) — reliable across all Supabase JS versions.
+  // head:true + count was silently returning null in newer versions, causing
+  // every run to skip even though the UPDATE succeeded.
+  const { data: claimed } = await supabase.from('pending_wa_uploads')
     .update({ status: 'processing', updated_at: new Date().toISOString() })
     .eq('id', item.id)
     .eq('status', 'pending')   // guard: skip if already claimed by another run
-    .select('id', { count: 'exact', head: true })
+    .select('id')
 
-  if (!count) {
+  if (!claimed?.length) {
     console.log(`Skipping ${item.id} — already claimed by another run`)
     return
   }
