@@ -107,6 +107,7 @@ function parseAdminMsg(text) {
 }
 
 // Create a guest upload link (replicates invite-supplier create logic)
+// Returns { url, supplierId }
 async function createUploadLink(supabaseAdmin, { companyName, contactPerson, phone, isOpen, adminId }) {
   let authEmail  = null
   let supplierId = null
@@ -151,7 +152,30 @@ async function createUploadLink(supabaseAdmin, { companyName, contactPerson, pho
     .single()
 
   if (invErr) throw new Error('DB error: ' + invErr.message)
-  return `${SITE_URL}/u/${invite.invite_token}`
+  return { url: `${SITE_URL}/u/${invite.invite_token}`, supplierId }
+}
+
+// Parse free-form "create" command text.
+// Supports: "Company, Person, +phone" / "Company +phone" / "+phone only" / Chinese names
+// Returns { companyName, contactPerson, phone }
+function parseCreateMsg(text) {
+  const t = (text || '').trim()
+  if (!t) return { companyName: '', contactPerson: '', phone: '' }
+
+  // Extract phone number first
+  const phoneMatch = t.match(/\+?\d[\d\s\-]{7,14}\d/)
+  const phone = phoneMatch ? phoneMatch[0].replace(/[\s\-]/g, '') : ''
+  const rest = phone ? t.replace(phoneMatch[0], '').replace(/[,\s]+$/, '').trim() : t
+
+  if (!rest) return { companyName: '', contactPerson: '', phone }
+
+  // Comma-separated: first = company, second = contact person
+  if (rest.includes(',')) {
+    const parts = rest.split(',').map(p => p.trim()).filter(Boolean)
+    return { companyName: parts[0] || '', contactPerson: parts[1] || '', phone }
+  }
+
+  return { companyName: rest, contactPerson: '', phone }
 }
 
 function extractContent(msg) {
@@ -277,6 +301,88 @@ export default async function handler(req, res) {
                 await clearSession(supabaseAdmin)
                 await sendWaText(waPhoneId, waToken, phone, '⏹ Upload session ended.')
 
+              // ── create → create new supplier + upload link ────────────────
+              } else if (/^create\b/i.test(trimmed)) {
+                const rest = trimmed.replace(/^create\s*/i, '').trim()
+                const parsed = parseCreateMsg(rest)
+
+                if (!parsed.companyName && !parsed.contactPerson && !parsed.phone) {
+                  await sendWaText(waPhoneId, waToken, phone,
+                    '⚠️ Please provide at least a company name or phone number.\n\nExamples:\ncreate UNIS Technology, Jim, +86138...\ncreate Ace Amusements +8613312345678\ncreate +8613812345678')
+                } else {
+                  // Duplicate check by phone (last 10 digits) then by name
+                  let duplicate = null
+
+                  if (parsed.phone) {
+                    const last10 = parsed.phone.replace(/[^\d]/g, '').slice(-10)
+                    const { data: phoneMatches } = await supabaseAdmin
+                      .from('suppliers')
+                      .select('id, company_name_en, supplier_code, phone')
+                      .ilike('phone', `%${last10}%`)
+                      .limit(3)
+                    if (phoneMatches?.length) duplicate = phoneMatches[0]
+                  }
+
+                  if (!duplicate && parsed.companyName) {
+                    const { data: nameMatches } = await supabaseAdmin
+                      .from('suppliers')
+                      .select('id, company_name_en, supplier_code, phone')
+                      .ilike('company_name_en', `%${parsed.companyName}%`)
+                      .limit(3)
+                    if (nameMatches?.length) duplicate = nameMatches[0]
+                  }
+
+                  if (duplicate) {
+                    await sendWaText(waPhoneId, waToken, phone,
+                      `⚠️ Supplier already exists:\n*${duplicate.company_name_en}* (${duplicate.supplier_code})${duplicate.phone ? '\nPhone: ' + duplicate.phone : ''}\n\nReply with *link ${duplicate.company_name_en}* to generate an upload link for them.`)
+                  } else {
+                    const { data: adminRows } = await supabaseAdmin.from('admins').select('id').limit(1)
+                    const adminId = adminRows?.[0]?.id || null
+                    const { url: linkUrl, supplierId } = await createUploadLink(supabaseAdmin, {
+                      companyName:   parsed.companyName,
+                      contactPerson: parsed.contactPerson,
+                      phone:         parsed.phone,
+                      isOpen:        false,
+                      adminId,
+                    })
+
+                    // Fetch auto-generated supplier code
+                    let supplierCode = ''
+                    if (supplierId) {
+                      const { data: sup } = await supabaseAdmin
+                        .from('suppliers').select('supplier_code').eq('id', supplierId).maybeSingle()
+                      supplierCode = sup?.supplier_code || ''
+                    }
+
+                    const greeting = parsed.contactPerson || parsed.companyName || ''
+                    const confirmMsg = [
+                      '✅ Supplier created!',
+                      '',
+                      parsed.companyName   ? `Company: ${parsed.companyName}`   : null,
+                      parsed.contactPerson ? `Contact: ${parsed.contactPerson}` : null,
+                      parsed.phone         ? `Phone:   ${parsed.phone}`         : null,
+                      supplierCode         ? `Code:    ${supplierCode}`         : null,
+                      '',
+                      `Upload link: ${linkUrl}`,
+                      '',
+                      '─────────────────────────',
+                      'Forward to supplier (中文):',
+                      '─────────────────────────',
+                      `您好${greeting ? ' ' + greeting : ''}！`,
+                      '',
+                      'Aryana Amusements 邀请您通过以下专属链接上传产品图片、视频和价格表（无需注册，直接上传）：',
+                      '',
+                      linkUrl,
+                      '',
+                      '如有疑问请联系：',
+                      'Bhavesh — Aryana Amusements',
+                      '+91 9841081945',
+                    ].filter(l => l !== null).join('\n')
+
+                    await sendWaText(waPhoneId, waToken, phone, confirmMsg)
+                  }
+                }
+
               // ── dir → list suppliers ──────────────────────────────────────
               } else if (/^dir\b/i.test(trimmed)) {
                 const { data: suppliers } = await supabaseAdmin
@@ -356,7 +462,7 @@ export default async function handler(req, res) {
                 const { companyName, contactPerson, phone: supplierPhone, isOpen } = parseAdminMsg(stripped || 'link')
                 const { data: adminRows } = await supabaseAdmin.from('admins').select('id').limit(1)
                 const adminId = adminRows?.[0]?.id || null
-                const linkUrl = await createUploadLink(supabaseAdmin, { companyName, contactPerson, phone: supplierPhone, isOpen, adminId })
+                const { url: linkUrl } = await createUploadLink(supabaseAdmin, { companyName, contactPerson, phone: supplierPhone, isOpen, adminId })
                 const greeting = contactPerson || companyName || ''
                 const confirmMsg = [
                   `✅ Upload link created`,
