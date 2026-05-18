@@ -88,7 +88,16 @@ function MediaThumb({ file }) {
 
 // ── Single editable row ───────────────────────────────────────
 function RenameRow({ file, mainCategories, subCategories, onSaved }) {
-  const [name, setName]       = useState(file.display_name || file.original_filename)
+  // Lock the extension so renaming can never accidentally drop it
+  const extMatch = (file.original_filename || '').match(/(\.[^.]+)$/)
+  const ext = extMatch ? extMatch[1].toLowerCase() : ''
+
+  function stripExt(raw) {
+    if (!ext || !raw) return raw || ''
+    return raw.replace(new RegExp('\\' + ext + '$', 'i'), '').trim()
+  }
+
+  const [name, setName]       = useState(() => stripExt(file.display_name || file.original_filename))
   const [mainCat, setMainCat] = useState(file.main_category_id || '')
   const [subCat, setSubCat]   = useState(file.sub_category_id  || '')
   const [saving, setSaving]   = useState(false)
@@ -98,7 +107,7 @@ function RenameRow({ file, mainCategories, subCategories, onSaved }) {
   const aiName       = file.ai_game_name
 
   function applyAiName() {
-    if (aiName) setName(aiName)
+    if (aiName) setName(stripExt(aiName))
   }
 
   async function save() {
@@ -138,13 +147,20 @@ function RenameRow({ file, mainCategories, subCategories, onSaved }) {
 
       {/* Display name input */}
       <td className="px-3 py-2 min-w-0">
-        <input
-          value={name}
-          onChange={e => setName(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && save()}
-          className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:ring-2 focus:ring-red-400 outline-none min-w-48"
-          placeholder="Enter display name…"
-        />
+        <div className="flex items-center border border-gray-200 rounded-lg focus-within:ring-2 focus-within:ring-red-400 overflow-hidden min-w-48">
+          <input
+            value={name}
+            onChange={e => setName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && save()}
+            className="flex-1 px-2.5 py-1.5 text-sm outline-none min-w-0"
+            placeholder="Enter display name…"
+          />
+          {ext && (
+            <span className="px-2 py-1.5 text-xs text-gray-400 bg-gray-50 border-l border-gray-200 shrink-0 font-mono select-none">
+              {ext}
+            </span>
+          )}
+        </div>
       </td>
 
       {/* Main category */}
