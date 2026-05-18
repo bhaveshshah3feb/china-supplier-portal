@@ -167,23 +167,40 @@ export default async function handler(req, res) {
     let payload, templateName = null, msgContent = null
 
     if (file_type === 'video') {
-      msgContent = `${name1} — ${name2}`
-      // Upload to WhatsApp media servers, then send directly as type:video
+      templateName = 'game_vidpic'
+      msgContent   = `${name1} — ${name2}`
+      // Upload to WhatsApp media servers first, then send via approved template.
+      // Templates work outside the 24-hour window; direct type:video messages do not.
       const mediaId = await uploadMediaToWhatsApp(file_url, phoneNumberId, accessToken)
       payload = {
         messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
-        type: 'video',
-        video: { id: mediaId, caption: msgContent },
+        type: 'template',
+        template: {
+          name: 'game_vidpic',
+          language: { code: 'en' },
+          components: [
+            { type: 'header', parameters: [{ type: 'video', video: { id: mediaId } }] },
+            { type: 'body',   parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
+          ],
+        },
       }
 
     } else if (file_type === 'image') {
-      msgContent = `${name1} — ${name2}`
-      // Upload to WhatsApp media servers, then send directly as type:image
+      templateName = 'game_pic'
+      msgContent   = `${name1} — ${name2}`
+      // Upload to WhatsApp media servers first, then send via approved template.
       const mediaId = await uploadMediaToWhatsApp(file_url, phoneNumberId, accessToken)
       payload = {
         messaging_product: 'whatsapp', recipient_type: 'individual', to: cleanPhone,
-        type: 'image',
-        image: { id: mediaId, caption: msgContent },
+        type: 'template',
+        template: {
+          name: 'game_pic',
+          language: { code: 'en' },
+          components: [
+            { type: 'header', parameters: [{ type: 'image', image: { id: mediaId } }] },
+            { type: 'body',   parameters: [{ type: 'text', text: name1 }, { type: 'text', text: name2 }] },
+          ],
+        },
       }
 
     } else {
