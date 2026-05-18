@@ -87,8 +87,17 @@ function calcWM(vidW, vidH) {
   const logoBoxW = logoDisplayW + 2 * logoPad
   const textX    = logoBoxW + logoPad
   const textW    = vidW - logoBoxW          // spans full remaining width to right edge
-  const phoneFs  = Math.round(bandH * 0.28)
-  const nameFs   = Math.round(bandH * 0.17)
+  // Available px for text: leave logoPad gap on right so text never touches the edge
+  const availW   = vidW - textX - logoPad
+
+  // DejaVuSans-Bold average glyph advance is ~0.72 em for the mixed strings we draw.
+  // Use 0.75 as a conservative cap so text always fits even with kerning/rounding.
+  const CHAR_W  = 0.75
+  let phoneFs   = Math.round(bandH * 0.28)
+  let nameFs    = Math.round(bandH * 0.17)
+  phoneFs = Math.min(phoneFs, Math.floor(availW / (WM.phone.length * CHAR_W)))
+  nameFs  = Math.min(nameFs,  Math.floor(availW / (WM.name.length  * CHAR_W)))
+
   const srcH     = Math.round(bandH * 0.38)
   const srcW     = Math.round(vidW * 0.18)
   const srcFs    = Math.round(srcH  * 0.36)
