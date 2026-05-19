@@ -83,13 +83,14 @@ export default async function handler(req, res) {
       permissions: role === 'staff' ? (permissions || {}) : {},
       status:      'invited',
       invited_by:  user.id,
-      invite_sent_at: new Date().toISOString(),
     }
     if (authUserId) staffRecord.auth_user_id = authUserId
     if (existing) {
-      await supabaseAdmin.from('staff_users').update(staffRecord).eq('id', existing.id)
+      const { error: upErr } = await supabaseAdmin.from('staff_users').update(staffRecord).eq('id', existing.id)
+      if (upErr) return res.status(500).json({ error: upErr.message })
     } else {
-      await supabaseAdmin.from('staff_users').insert(staffRecord)
+      const { error: insErr } = await supabaseAdmin.from('staff_users').insert(staffRecord)
+      if (insErr) return res.status(500).json({ error: insErr.message })
     }
 
     // For suppliers: activate their supplier record automatically
