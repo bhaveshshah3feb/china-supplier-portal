@@ -66,7 +66,7 @@ export default async function handler(req, res) {
     }
 
     // Create auth invite
-    const redirectTo = role === 'supplier' ? `${appUrl}/login` : `${appUrl}/admin/dashboard`
+    const redirectTo = role === 'supplier' ? `${appUrl}/login` : `${appUrl}/set-password`
     const { data: inviteData, error: inviteErr } = await supabaseAdmin.auth.admin.inviteUserByEmail(email, {
       redirectTo,
       data: { name, role },
