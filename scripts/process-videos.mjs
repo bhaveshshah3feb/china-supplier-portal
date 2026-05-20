@@ -108,6 +108,84 @@ function calcWM(vidW, vidH) {
            phoneFs, nameFs, srcH, srcW, srcFs, phY, nmY }
 }
 
+// ── Title card / outro watermark detector ────────────────────
+// Checks dedicated start/end frames for full-screen title cards and persistent
+// text watermarks (company name, website URL, social handles).
+// Returns array of {x_pct,y_pct,w_pct,h_pct,start_sec?,end_sec?} or null.
+async function detectTitleCards(startEntries, endEntries, duration) {
+  const PROMPT = `You are analyzing a frame from the very beginning or end of a product video made by a Chinese amusement equipment manufacturer.
+
+Your task: find supplier company branding that needs to be concealed.
+
+CASE 1 — FULL-SCREEN TITLE CARD: The entire frame is company brand content (logo, company name, website URL). There is no game or machine visible in the background. This is an intro or outro screen.
+Reply: {"type":"full_screen","confidence":0.9}
+
+CASE 2 — TEXT WATERMARKS overlaid on video: Company name, website URL (e.g. www.xxx.com), or social media handle (@companyname) shown as text on top of otherwise normal video footage. The game or product IS visible in the background.
+For each distinct watermark region, give a generous bounding box:
+Reply: {"type":"watermark","regions":[{"x_pct":X,"y_pct":Y,"w_pct":W,"h_pct":H}],"confidence":0.9}
+
+CASE 3 — Nothing to conceal (normal game footage, no company contact info):
+Reply: {"type":"none"}
+
+DO NOT flag:
+- "Aryan Amusements", "+91 9841081945", or the lion logo (buyer's watermark — already there)
+- General game artwork or gameplay content without contact information
+
+Reply ONLY with valid JSON, no markdown.`
+
+  const cards = []
+
+  async function checkFrame(entry, isStart) {
+    try {
+      const resp = await anthropic.messages.create({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: readFileSync(entry.path).toString('base64') } },
+          { type: 'text', text: PROMPT },
+        ]}],
+      })
+      const txt = resp.content[0]?.text?.trim().replace(/```json|```/g, '').trim()
+      const d = JSON.parse(txt)
+      const conf = d.confidence ?? 0.8
+
+      if (d.type === 'full_screen' && conf >= 0.65) {
+        if (isStart) {
+          // Cover from 0 to frame time + 3s buffer (cap at 25% of duration)
+          const endSec = Math.min(entry.time + 3, duration * 0.25)
+          cards.push({ x_pct: 0, y_pct: 0, w_pct: 100, h_pct: 100, end_sec: endSec })
+          console.log(`  Intro title card at ${entry.time.toFixed(1)}s — cover 0..${endSec.toFixed(1)}s`)
+        } else {
+          // Cover from frame time - 3s buffer to end (floor at 75% of duration)
+          const startSec = Math.max(entry.time - 3, duration * 0.75)
+          cards.push({ x_pct: 0, y_pct: 0, w_pct: 100, h_pct: 100, start_sec: startSec })
+          console.log(`  Outro title card at ${entry.time.toFixed(1)}s — cover ${startSec.toFixed(1)}s..end`)
+        }
+      } else if (d.type === 'watermark' && d.regions?.length && conf >= 0.65) {
+        for (const r of d.regions) {
+          if (isStart) {
+            const endSec = Math.min(entry.time + 3, duration * 0.25)
+            cards.push({ x_pct: r.x_pct, y_pct: r.y_pct, w_pct: r.w_pct, h_pct: r.h_pct, end_sec: endSec })
+          } else {
+            const startSec = Math.max(entry.time - 3, duration * 0.75)
+            cards.push({ x_pct: r.x_pct, y_pct: r.y_pct, w_pct: r.w_pct, h_pct: r.h_pct, start_sec: startSec })
+          }
+        }
+        console.log(`  ${isStart ? 'Intro' : 'Outro'} watermarks at ${entry.time.toFixed(1)}s: ${d.regions.length} region(s)`)
+      } else {
+        console.log(`  No title card at ${isStart ? 'start' : 'end'} frame (type=${d.type})`)
+      }
+    } catch (e) {
+      console.warn(`  Title card detection failed at ${entry.time.toFixed(1)}s:`, e.message)
+    }
+  }
+
+  for (const entry of startEntries) await checkFrame(entry, true)
+  for (const entry of endEntries)   await checkFrame(entry, false)
+
+  return cards.length > 0 ? cards : null
+}
+
 // ── Supplier logo detector ────────────────────────────────────
 // Runs Claude Vision on 1..N frames, returns union bounding box of all detections.
 // mimeType: MIME type of the frame files (always image/jpeg for video frames; varies for images)
@@ -456,12 +534,47 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
         }
       }
 
+      // ── Title card / outro watermark detection ─────────────────
+      // Sample dedicated frames at the very start and very end of the video
+      // to catch intro title cards and outro text watermarks that mid-video
+      // frames miss entirely.
+      let supplierCardRegions = null
+      const startTime = Math.min(1.5, duration * 0.04)
+      const endTime   = Math.max(duration - 1.5, duration * 0.96)
+      const startFramePath = join(TMP, `startframe_${jobId}.jpg`)
+      const endFramePath   = join(TMP, `endframe_${jobId}.jpg`)
+      const titleEntries   = { start: [], end: [] }
+
+      try {
+        await execAsync(`ffmpeg -ss ${startTime.toFixed(2)} -i "${tmpInput}" -vframes 1 -q:v 2 -vf "scale=640:-1" "${startFramePath}" -y`)
+        if (existsSync(startFramePath)) {
+          titleEntries.start.push({ path: startFramePath, time: startTime })
+          frames.push(startFramePath) // add to cleanup list
+        }
+      } catch (e) { console.warn('  Could not extract start frame for title card detection:', e.message) }
+
+      try {
+        await execAsync(`ffmpeg -ss ${endTime.toFixed(2)} -i "${tmpInput}" -vframes 1 -q:v 2 -vf "scale=640:-1" "${endFramePath}" -y`)
+        if (existsSync(endFramePath)) {
+          titleEntries.end.push({ path: endFramePath, time: endTime })
+          frames.push(endFramePath)
+        }
+      } catch (e) { console.warn('  Could not extract end frame for title card detection:', e.message) }
+
+      if (titleEntries.start.length > 0 || titleEntries.end.length > 0) {
+        supplierCardRegions = await detectTitleCards(titleEntries.start, titleEntries.end, duration)
+        if (supplierCardRegions?.length) {
+          console.log(`  Title card regions: ${JSON.stringify(supplierCardRegions)}`)
+        }
+      }
+
       await supabase.from('uploads').update({
-        ai_main_category_id:  matched?.id || null,
-        main_category_id:     upload.main_category_id || matched?.id || null,
-        ai_confidence:        matched ? 0.9 : 0.3,
-        ai_game_name:         aiGameName,
-        supplier_logo_region: supplierLogoRegion,
+        ai_main_category_id:   matched?.id || null,
+        main_category_id:      upload.main_category_id || matched?.id || null,
+        ai_confidence:         matched ? 0.9 : 0.3,
+        ai_game_name:          aiGameName,
+        supplier_logo_region:  supplierLogoRegion,
+        supplier_card_regions: supplierCardRegions,
       }).eq('id', upload.id)
 
       // Queue the watermark job regardless of whether AI categorization succeeded
@@ -534,6 +647,24 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       const escapedPhone = WM.phone.replace(/'/g, "\\'" ).replace(/:/g, '\\:')
       const escapedCode  = supplierCode.replace(/'/g, "\\'" ).replace(/:/g, '\\:')
 
+      // ── Intro/outro title card covers (time-limited) ──────────
+      const cardCovers = (upload.supplier_card_regions || []).map(region => {
+        const rx = Math.round(vidW * region.x_pct / 100)
+        const ry = Math.round(vidH * region.y_pct / 100)
+        const rw = Math.min(vidW - rx, Math.round(vidW * region.w_pct / 100))
+        const rh = Math.min(vidH - ry, Math.round(vidH * region.h_pct / 100))
+        let enableExpr = ''
+        if (region.start_sec !== undefined && region.end_sec !== undefined) {
+          enableExpr = `:enable='between(t,${region.start_sec.toFixed(2)},${region.end_sec.toFixed(2)})'`
+        } else if (region.start_sec !== undefined) {
+          enableExpr = `:enable='gte(t,${region.start_sec.toFixed(2)})'`
+        } else if (region.end_sec !== undefined) {
+          enableExpr = `:enable='lte(t,${region.end_sec.toFixed(2)})'`
+        }
+        return `drawbox=x=${rx}:y=${ry}:w=${rw}:h=${rh}:color=black@1:t=fill${enableExpr}`
+      })
+      if (cardCovers.length > 0) console.log(`  Applying ${cardCovers.length} time-limited card cover(s)`)
+
       // ── Supplier logo camouflage ───────────────────────────
       const supplierRegion = upload.supplier_logo_region
       let supplierCoverFilters = []
@@ -556,7 +687,8 @@ Reply with ONLY the slug of the best matching category (e.g. "arcade" or "kiddy"
       }
 
       const videoFilters = [
-        ...supplierCoverFilters,   // solid black cover over supplier logo (comes first)
+        ...cardCovers,             // time-limited intro/outro title card covers (applied first)
+        ...supplierCoverFilters,   // solid black cover over supplier logo (mid-video)
         `drawbox=x=0:y=0:w=${logoBoxW}:h=${bandH}:color=black@0.80:t=fill`,
         `drawbox=x=${logoBoxW}:y=0:w=${textW}:h=${bandH}:color=black@0.80:t=fill`,
         `drawbox=x=iw-${srcW}:y=ih-${srcH}:w=${srcW}:h=${srcH}:color=black@0.75:t=fill`,
